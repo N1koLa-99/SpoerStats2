@@ -1,0 +1,6 @@
+@SpoerStats2_HostAddress = http://localhost:5214
+
+GET {{SpoerStats2_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
