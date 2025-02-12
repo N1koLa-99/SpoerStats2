@@ -46,12 +46,26 @@ namespace SpoerStats2.Controllers
         [HttpPost]
         public async Task<ActionResult<Result>> PostResult(Result result)
         {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
+            if (result.ValueTime < 0 || result.ValueTime > 86400)
+            {
+                return BadRequest("Невалидно време. Стойността трябва да е между 0 и 86400 секунди.");
+            }
+
             try
             {
                 await _resultService.AddResult(result);
                 return CreatedAtAction("GetResult", new { id = result.Id }, result);
             }
-            catch (Exception ex)
+            catch (ArgumentException ex)
+            {
+                return BadRequest(ex.Message);
+            }
+            catch (Exception)
             {
                 return StatusCode(500, "Internal server error");
             }

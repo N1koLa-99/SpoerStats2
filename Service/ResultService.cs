@@ -24,6 +24,11 @@ public class ResultService
 
     public async Task AddResult(Result result)
     {
+        if (result.ValueTime < 0 || result.ValueTime > 86400)
+        {
+            throw new ArgumentException("Невалидна стойност за време.");
+        }
+
         await _resultRepository.AddResult(result);
     }
 
