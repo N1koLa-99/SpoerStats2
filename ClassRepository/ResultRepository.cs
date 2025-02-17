@@ -38,6 +38,15 @@ namespace SpoerStats2.ClassRepository
             }
         }
 
+        public async Task<IEnumerable<Result>> GetResultsByUserIds(IEnumerable<int> userIds)
+        {
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                var query = "SELECT * FROM Results WHERE UserId IN @UserIds";
+                return await connection.QueryAsync<Result>(query, new { UserIds = userIds });
+            }
+        }
+
         public async Task AddResult(Result result)
         {
             using (var connection = new SqlConnection(_connectionString))
@@ -65,5 +74,4 @@ namespace SpoerStats2.ClassRepository
             }
         }
     }
-
 }

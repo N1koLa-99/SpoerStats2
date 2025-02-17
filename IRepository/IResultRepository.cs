@@ -10,6 +10,8 @@ namespace SpoerStats2.Repository
         Task AddResult(Result result);
         Task UpdateResult(Result result);
         Task DeleteResult(int id);
+        Task<IEnumerable<Result>> GetResultsByUserIds(IEnumerable<int> userIds);
+
 
     }
 
