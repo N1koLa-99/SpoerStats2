@@ -1,6 +1,7 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using SpoerStats2.Models;
-using System.ComponentModel.DataAnnotations; // За валидации
+using System.ComponentModel.DataAnnotations;
 
 namespace SpoerStats2.Controllers
 {
@@ -70,10 +71,23 @@ namespace SpoerStats2.Controllers
         }
 
         [HttpPost]
-        public async Task<ActionResult<Result>> PostResult([FromBody] Result result, [Required] int requesterId)
+        public async Task<ActionResult<Result>> PostResult([FromBody] Result result)
         {
+            var requesterIdStr = HttpContext.Request.Headers["Requester-Id"].ToString();
+            var roleIdStr = HttpContext.Request.Headers["Role-Id"].ToString();
+            var clubIdStr = HttpContext.Request.Headers["Club-Id"].ToString();
+
+            if (string.IsNullOrEmpty(requesterIdStr) ||
+                string.IsNullOrEmpty(roleIdStr) ||
+                string.IsNullOrEmpty(clubIdStr) ||
+                !int.TryParse(requesterIdStr, out int requesterId) ||
+                !int.TryParse(roleIdStr, out int roleId) ||
+                !int.TryParse(clubIdStr, out int clubId))
+            {
+                return BadRequest("Невалидни данни в хедърите.");
+            }
+
             if (!ModelState.IsValid) return BadRequest(ModelState);
-            if (requesterId <= 0) return BadRequest("Невалиден ID на заявителя.");
             if (result == null) return BadRequest("Липсва информация за резултата.");
             if (result.UserId <= 0) return BadRequest("Невалиден ID на потребителя.");
             if (result.ValueTime <= 0) return BadRequest("Резултатът трябва да е положителна стойност.");
@@ -83,10 +97,10 @@ namespace SpoerStats2.Controllers
             {
                 var user = await _userService.GetUserById(requesterId);
                 if (user == null) return NotFound("Потребителят не е намерен.");
-                if (user.RoleID != 2) return Forbid("Само треньори могат да добавят резултати.");
+                if (roleId != 2) return Forbid("Само треньори могат да добавят резултати.");
 
-                await _resultService.AddResult(result, requesterId, user.RoleID, user.ClubID);
-                return CreatedAtAction(nameof(GetResult), new { id = result.Id, requesterId }, result);
+                await _resultService.AddResult(result, requesterId, roleId, clubId);
+                return CreatedAtAction(nameof(GetResult), new { id = result.Id }, result);
             }
             catch (ArgumentException ex)
             {
@@ -102,11 +116,26 @@ namespace SpoerStats2.Controllers
             }
         }
 
+
         [HttpPut("{id}")]
-        public async Task<IActionResult> PutResult(int id, [FromBody] Result result, [Required] int requesterId)
+        public async Task<IActionResult> PutResult(int id, [FromBody] Result result)
         {
+            var requesterIdStr = HttpContext.Request.Headers["Requester-Id"].ToString();
+            var roleIdStr = HttpContext.Request.Headers["Role-Id"].ToString();
+            var clubIdStr = HttpContext.Request.Headers["Club-Id"].ToString();
+
+            if (string.IsNullOrEmpty(requesterIdStr) ||
+                string.IsNullOrEmpty(roleIdStr) ||
+                string.IsNullOrEmpty(clubIdStr) ||
+                !int.TryParse(requesterIdStr, out int requesterId) ||
+                !int.TryParse(roleIdStr, out int roleId) ||
+                !int.TryParse(clubIdStr, out int clubId))
+            {
+                return BadRequest("Невалидни данни в хедърите.");
+            }
+
             if (id != result.Id) return BadRequest("Несъответствие между ID в URL и ID на резултата.");
-            if (requesterId <= 0) return BadRequest("Невалиден ID на заявителя.");
+            if (!ModelState.IsValid) return BadRequest(ModelState);
             if (result == null) return BadRequest("Липсва информация за резултата.");
             if (result.UserId <= 0) return BadRequest("Невалиден ID на потребителя.");
             if (result.ValueTime <= 0) return BadRequest("Резултатът трябва да е положителна стойност.");
@@ -116,8 +145,9 @@ namespace SpoerStats2.Controllers
             {
                 var user = await _userService.GetUserById(requesterId);
                 if (user == null) return NotFound("Потребителят не е намерен.");
+                if (roleId != 2) return Forbid("Само треньори могат да редактират резултати.");
 
-                await _resultService.UpdateResult(result, requesterId, user.RoleID, user.ClubID);
+                await _resultService.UpdateResult(result, requesterId, roleId, clubId);
                 return NoContent();
             }
             catch (KeyNotFoundException ex)
@@ -130,21 +160,45 @@ namespace SpoerStats2.Controllers
             }
             catch
             {
-                return StatusCode(500, "Internal server error.");
+                return StatusCode(500, "Вътрешна грешка на сървъра.");
             }
         }
+
 
         [HttpDelete("{id}")]
-        public async Task<IActionResult> DeleteResult(int id, [Required] int requesterId)
+        public async Task<IActionResult> DeleteResult(int id)
         {
-            if (id <= 0 || requesterId <= 0) return BadRequest("Невалиден ID на резултат или заявител.");
+            var requesterIdStr = HttpContext.Request.Headers["Requester-Id"].ToString();
+            var roleIdStr = HttpContext.Request.Headers["Role-Id"].ToString();
+            var clubIdStr = HttpContext.Request.Headers["Club-Id"].ToString();
+
+            if (string.IsNullOrEmpty(requesterIdStr) ||
+                string.IsNullOrEmpty(roleIdStr) ||
+                string.IsNullOrEmpty(clubIdStr) ||
+                !int.TryParse(requesterIdStr, out int requesterId) ||
+                !int.TryParse(roleIdStr, out int roleId) ||
+                !int.TryParse(clubIdStr, out int clubId) ||
+                id <= 0 || requesterId <= 0 || roleId <= 0 || clubId <= 0)
+            {
+                return BadRequest("Невалидни входни данни.");
+            }
 
             try
             {
-                var user = await _userService.GetUserById(requesterId);
-                if (user == null) return NotFound("Потребителят не е намерен.");
+                var requester = await _userService.GetUserById(requesterId);
+                if (requester == null)
+                    return NotFound("Потребителят не е намерен.");
 
-                await _resultService.DeleteResult(id, requesterId, user.RoleID, user.ClubID);
+                var result = await _resultService.GetResultById(id, requesterId, roleId, clubId);
+                if (result == null)
+                    return NotFound("Резултатът не е намерен.");
+
+                if (roleId != 2) // Само треньори (RoleID = 2) могат да трият резултати
+                {
+                    return Forbid("Само треньори могат да изтриват резултати.");
+                }
+
+                await _resultService.DeleteResult(id, requesterId, roleId, clubId);
                 return NoContent();
             }
             catch (KeyNotFoundException ex)
@@ -161,28 +215,58 @@ namespace SpoerStats2.Controllers
             }
         }
 
+
         [HttpGet("by-user/{userId}/by-discipline/{disciplineId}")]
-        public async Task<ActionResult<IEnumerable<Result>>> GetResultsByUserIdAndDisciplineId(int userId, int disciplineId, [Required] int requesterId)
+        public async Task<ActionResult<IEnumerable<Result>>> GetResultsByUserIdAndDisciplineId(int userId, int disciplineId)
         {
+            if (!HttpContext.Request.Headers.TryGetValue("Requester-Id", out var requesterIdStr) ||
+                !int.TryParse(requesterIdStr, out int requesterId))
+            {
+                return BadRequest("Не :/ ");
+            }
+
             if (userId <= 0 || disciplineId <= 0 || requesterId <= 0)
+            {
                 return BadRequest("Невалидни входни данни.");
+            }
 
             try
             {
-                var user = await _userService.GetUserById(requesterId);
-                if (user == null) return NotFound("Потребителят не е намерен.");
+                var requester = await _userService.GetUserById(requesterId);
+                if (requester == null)
+                {
+                    return NotFound("Потребителят не е намерен.");
+                }
+
+                var targetUser = await _userService.GetUserById(userId);
+                if (targetUser == null)
+                {
+                    return NotFound("Търсеният потребител не е намерен.");
+                }
+
+                if (requester.ClubID != targetUser.ClubID)
+                {
+                    return Forbid("Нямате достъп до този потребител.");
+                }
+
+                if (requester.RoleID != 2 && requesterId != userId)
+                {
+                    return Forbid("Нямате права да виждате тези резултати.");
+                }
 
                 var results = await _resultService.GetResultsByUserIdAndDisciplineId(userId, disciplineId);
+                if (results == null || !results.Any())
+                {
+                    return NotFound("Няма намерени резултати за този потребител и дисциплина.");
+                }
+
                 return Ok(results);
             }
-            catch (UnauthorizedAccessException ex)
+            catch (Exception ex)
             {
-                return Forbid(ex.Message);
-            }
-            catch
-            {
-                return StatusCode(500, "Internal server error.");
+                return StatusCode(500, "Вътрешна грешка на сървъра.");
             }
         }
+
     }
 }
