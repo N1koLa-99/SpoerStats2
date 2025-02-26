@@ -12,5 +12,6 @@
         public int ClubID { get; set; }
         public string profileImage_url { get; set; }
         public int YearOfBirth { get; set; }
+        public int StatusID { get; set; }
     }
 }

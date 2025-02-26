@@ -19,6 +19,9 @@ namespace SpoerStats2.Repository
         Task UpdatePassword(int id, string password);
         Task<IEnumerable<User>> SearchUsersByName(string query);
         Task<bool> DoesEmailExist(string email);
+        Task<IEnumerable<User>> GetPendingUsersByClubId(int clubId);
+        Task<bool> UpdateUserStatus(int userId, int statusId);
+        Task UpdateUserClubStatus(int userId, int clubId);
 
     }
 

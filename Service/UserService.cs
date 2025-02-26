@@ -32,6 +32,21 @@ public class UserService
         user.Password = _passwordHasher.HashPassword(user, user.Password);
         await _userRepository.AddUser(user);
     }
+    public async Task<bool> ApproveUser(int userId)
+    {
+        return await _userRepository.UpdateUserStatus(userId, 2);
+    }
+
+    public async Task<bool> RejectUser(int userId)
+    {
+        return await _userRepository.UpdateUserStatus(userId, 3); 
+    }
+
+    public async Task<IEnumerable<User>> GetPendingUsers(int clubId)
+    {
+        return await _userRepository.GetPendingUsersByClubId(clubId);
+    }
+
 
     public async Task UpdateUser(User user)
     {
@@ -65,7 +80,7 @@ public class UserService
         return user;
     }
 
-    public async Task<User> GetUserByEmailAndPassword(string email, string password)
+    public async Task<User?> GetUserByEmailAndPassword(string email, string password)
     {
         var user = await _userRepository.GetUserByEmail(email);
         if (user == null) return null;
@@ -73,6 +88,7 @@ public class UserService
         var result = _passwordHasher.VerifyHashedPassword(user, user.Password, password);
         return result == PasswordVerificationResult.Success ? user : null;
     }
+
     public async Task<IEnumerable<User>> GetUsersByClubId(int clubId)
     {
         return await _userRepository.GetUsersByClubId(clubId);
@@ -198,8 +214,15 @@ public class UserService
         user.Password = _passwordHasher.HashPassword(user, newPassword);
         await _userRepository.UpdatePassword(id, user.Password);
     }
+  
     public async Task<IEnumerable<User>> SearchUsersByName(string query)
     {
         return await _userRepository.SearchUsersByName(query);
     }
+    public async Task UpdateUserClubStatus(int userId, int clubId)
+    {
+        await _userRepository.UpdateUserClubStatus(userId, clubId);
+    }
+
+
 }

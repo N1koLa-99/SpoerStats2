@@ -3,6 +3,7 @@ using SpoerStats2.Models;
 using System.Security.Claims;
 using System.IO;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity.Data;
 
 namespace SpoerStats2.Controllers
 {
@@ -19,11 +20,23 @@ namespace SpoerStats2.Controllers
             _logger = logger;
         }
 
-        [HttpGet]
-        public async Task<ActionResult<IEnumerable<User>>> GetUsers()
+        [HttpGet("all")]
+        public async Task<ActionResult<IEnumerable<User>>> GetAllUsers()
         {
-            return Ok(await _userService.GetAllUsers());
+            var users = await _userService.GetAllUsers();
+            return Ok(users); // Връща всички потребители
         }
+
+        [HttpGet("approved")]
+        public async Task<ActionResult<IEnumerable<User>>> GetApprovedUsers()
+        {
+            var users = await _userService.GetAllUsers();
+            var acceptedUsers = users.Where(u => u.StatusID == 2).ToList();
+
+            return Ok(acceptedUsers); // Връща само одобрените потребители
+        }
+
+
 
         [HttpGet("{id}")]
         public async Task<ActionResult<User>> GetUser(int id)
@@ -105,6 +118,8 @@ namespace SpoerStats2.Controllers
             return Ok(result);
         }
 
+
+
         private int GetUserIdFromToken()
         {
             var userIdClaim = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier);
@@ -142,12 +157,18 @@ namespace SpoerStats2.Controllers
         public async Task<ActionResult<IEnumerable<User>>> GetUsersByClubId(int clubId)
         {
             var users = await _userService.GetUsersByClubId(clubId);
-            if (users == null || !users.Any())
+
+            // Филтрираме само одобрените потребители (StatusID = 2)
+            var acceptedUsers = users.Where(u => u.StatusID == 2).ToList();
+
+            if (!acceptedUsers.Any())
             {
-                return NotFound();
+                return NotFound("Няма одобрени потребители в този клуб.");
             }
-            return Ok(users);
+
+            return Ok(acceptedUsers);
         }
+
 
         [HttpPost("uploadProfilePicture/{userId}")]
         public async Task<IActionResult> UploadProfilePicture(int userId, IFormFile file)
@@ -268,5 +289,44 @@ namespace SpoerStats2.Controllers
 
             return Ok(users);
         }
+        [HttpGet("pending/{clubId}")]
+        public async Task<IActionResult> GetPendingUsers(int clubId)
+        {
+            var users = await _userService.GetPendingUsers(clubId);
+            return Ok(users);
+        }
+
+        [HttpPost("approve/{userId}")]
+        public async Task<IActionResult> ApproveUser(int userId)
+        {
+            var success = await _userService.ApproveUser(userId);
+            if (success)
+                return Ok(new { message = "User approved successfully." });
+            return BadRequest(new { message = "Failed to approve user." });
+        }
+
+        [HttpPost("reject/{userId}")]
+        public async Task<IActionResult> RejectUser(int userId)
+        {
+            var success = await _userService.RejectUser(userId);
+            if (success)
+                return Ok(new { message = "User rejected successfully." });
+            return BadRequest(new { message = "Failed to reject user." });
+        }
+
+        [HttpPost("{userId}/requestJoin/{clubId}")]
+        public async Task<IActionResult> RequestJoinClub(int userId, int clubId)
+        {
+            try
+            {
+                await _userService.UpdateUserClubStatus(userId, clubId);
+                return Ok(new { message = "Заявката за присъединяване е изпратена успешно." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { error = ex.Message });
+            }
+        }
+
     }
 }

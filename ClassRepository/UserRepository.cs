@@ -49,15 +49,17 @@ namespace SpoerStats2.ClassRepository
                 return await connection.QuerySingleOrDefaultAsync<User>(query, new { Email = email });
             }
         }
+
         public async Task AddUser(User user)
         {
             using (var connection = new SqlConnection(_connectionString))
             {
-                var query = "INSERT INTO Users (FirstName, LastName, Email, Password, Gender, RoleID, ClubID, profileImage_url, YearOfBirth) " +
-                            "OUTPUT INSERTED.Id " + // Връща ID на новия запис
-                            "VALUES (@FirstName, @LastName, @Email, @Password, @Gender, @RoleID, @ClubID, @profileImage_url, @YearOfBirth)";
+                var query = "INSERT INTO Users (FirstName, LastName, Email, Password, Gender, RoleID, ClubID, profileImage_url, YearOfBirth, StatusID) " +
+                            "OUTPUT INSERTED.Id " +
+                            "VALUES (@FirstName, @LastName, @Email, @Password, @Gender, @RoleID, @ClubID, @profileImage_url, @YearOfBirth, @StatusID)";
 
-                // Задаваме генерираното ID на потребителя
+                user.StatusID = 1; // Първоначален статус "pending"
+
                 user.Id = await connection.QuerySingleAsync<int>(query, new
                 {
                     user.FirstName,
@@ -68,11 +70,67 @@ namespace SpoerStats2.ClassRepository
                     user.RoleID,
                     user.ClubID,
                     user.profileImage_url,
-                    user.YearOfBirth
+                    user.YearOfBirth,
+                    user.StatusID
                 });
+
+                // Изпращаме заявка за одобрение на мениджърите
+                await SendApprovalRequest(user);
+            }
+        }
+        private async Task SendApprovalRequest(User user)
+        {
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                // Намираме всички мениджъри (RoleID = 2) в същия клуб
+                var managers = await connection.QueryAsync<User>(
+                    "SELECT * FROM Users WHERE ClubID = @ClubID AND RoleID = 2",
+                    new { ClubID = user.ClubID }
+                );
+
+                foreach (var manager in managers)
+                {
+                    // Тук може да изпратиш имейл или вътрешно известие в системата
+                    Console.WriteLine($"Изпратена заявка за одобрение към {manager.Email} за потребител {user.Email}");
+                }
+            }
+        }
+        public async Task<IEnumerable<User>> GetPendingUsersByClubId(int clubId)
+        {
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                var query = "SELECT * FROM Users WHERE ClubID = @ClubID AND StatusID = 1";
+                return await connection.QueryAsync<User>(query, new { ClubID = clubId });
+            }
+        }
+        public async Task<bool> UpdateUserStatus(int userId, int statusId)
+        {
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                var query = "UPDATE Users SET StatusID = @StatusID WHERE Id = @UserId";
+                var result = await connection.ExecuteAsync(query, new { StatusID = statusId, UserId = userId });
+                return result > 0;
+            }
+        }
+        public async Task<bool> ApproveUser(int userId)
+        {
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                var query = "UPDATE Users SET StatusID = 2 WHERE Id = @UserId"; // 2 = "приет"
+                var result = await connection.ExecuteAsync(query, new { UserId = userId });
+                return result > 0;
             }
         }
 
+        public async Task<bool> RejectUser(int userId)
+        {
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                var query = "UPDATE Users SET StatusID = 3 WHERE Id = @UserId"; // 3 = "отхвърлен"
+                var result = await connection.ExecuteAsync(query, new { UserId = userId });
+                return result > 0;
+            }
+        }
         public async Task UpdateUser(User user)
         {
             using (var connection = new SqlConnection(_connectionString))
@@ -129,6 +187,24 @@ namespace SpoerStats2.ClassRepository
                 return await connection.QueryAsync<User>(query, new { ClubID = clubId });
             }
         }
+
+
+        public async Task UpdateUserClubStatus(int userId, int clubId)
+        {
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                var query = "UPDATE Users SET ClubID = @ClubID, StatusID = 1 WHERE Id = @UserId";
+
+                var parameters = new DynamicParameters();
+                parameters.Add("ClubID", clubId);
+                parameters.Add("UserId", userId);
+
+                await connection.ExecuteAsync(query, parameters);
+            }
+        }
+
+
+
         public async Task UpdateFirstName(int id, string firstName)
         {
             using (var connection = new SqlConnection(_connectionString))
