@@ -4,6 +4,7 @@ using System.Data.SqlClient;
 using System.Threading.Tasks;
 using SpoerStats2.Repository;
 using Microsoft.AspNetCore.Identity;
+using static Dropbox.Api.Files.SearchMatchType;
 
 namespace SpoerStats2.ClassRepository
 {
@@ -256,7 +257,5 @@ namespace SpoerStats2.ClassRepository
                 return await connection.QueryAsync<User>(sqlQuery, new { Query = $"%{query}%" });
             }
         }
-
-
     }
 }

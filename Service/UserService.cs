@@ -223,6 +223,10 @@ public class UserService
     {
         await _userRepository.UpdateUserClubStatus(userId, clubId);
     }
+    public async Task<bool> DoesEmailExist(string email)
+    {
+        return await _userRepository.DoesEmailExist(email);
+    }
 
 
 }

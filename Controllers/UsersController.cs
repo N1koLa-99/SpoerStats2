@@ -327,6 +327,18 @@ namespace SpoerStats2.Controllers
                 return StatusCode(500, new { error = ex.Message });
             }
         }
+        [HttpGet("check-email")]
+        public async Task<IActionResult> CheckEmailExists([FromQuery] string email)
+        {
+            if (string.IsNullOrWhiteSpace(email))
+            {
+                return BadRequest("Email is required.");
+            }
+
+            bool exists = await _userService.DoesEmailExist(email);
+            return Ok(new { exists });
+        }
+
 
     }
 }
