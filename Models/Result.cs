@@ -12,5 +12,11 @@ namespace SpoerStats2.Models
         public decimal ValueTime { get; set; }
 
         public DateTime ResultDate { get; set; }
+
+        [Range(10, 50, ErrorMessage = "Стандартът на басейна трябва да бъде от 10 до 50 метра.")]
+        public int SwimmingPoolStandart { get; set; } 
+
+        [StringLength(255)]
+        public string Location { get; set; } 
     }
 }

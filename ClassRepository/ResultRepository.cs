@@ -51,7 +51,9 @@ namespace SpoerStats2.ClassRepository
         {
             using (var connection = new SqlConnection(_connectionString))
             {
-                var query = "INSERT INTO Results (UserId, DisciplineId, ValueTime, ResultDate) VALUES (@UserId, @DisciplineId, @ValueTime, @ResultDate)";
+                var query = @"INSERT INTO Results (UserId, DisciplineId, ValueTime, ResultDate, SwimmingPoolStandart, Location)
+              VALUES (@UserId, @DisciplineId, @ValueTime, @ResultDate, @SwimmingPoolStandart, @Location)";
+
                 await connection.ExecuteAsync(query, result);
             }
         }
@@ -60,7 +62,15 @@ namespace SpoerStats2.ClassRepository
         {
             using (var connection = new SqlConnection(_connectionString))
             {
-                var query = "UPDATE Results SET UserId = @UserId, DisciplineId = @DisciplineId, ValueTime = @ValueTime, ResultDate = @ResultDate WHERE Id = @Id";
+                var query = @"UPDATE Results 
+              SET UserId = @UserId, 
+                  DisciplineId = @DisciplineId, 
+                  ValueTime = @ValueTime, 
+                  ResultDate = @ResultDate,
+                  SwimmingPoolStandart = @SwimmingPoolStandart,
+                  Location = @Location
+              WHERE Id = @Id";
+
                 await connection.ExecuteAsync(query, result);
             }
         }

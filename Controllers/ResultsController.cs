@@ -87,11 +87,8 @@ namespace SpoerStats2.Controllers
                 return BadRequest("Невалидни данни в хедърите.");
             }
 
-            if (!ModelState.IsValid) return BadRequest(ModelState);
             if (result == null) return BadRequest("Липсва информация за резултата.");
-            if (result.UserId <= 0) return BadRequest("Невалиден ID на потребителя.");
-            if (result.ValueTime <= 0) return BadRequest("Резултатът трябва да е положителна стойност.");
-            if (result.DisciplineId <= 0) return BadRequest("Невалиден ID на дисциплината.");
+            if (!ModelState.IsValid) return BadRequest(ModelState);
 
             try
             {
@@ -115,6 +112,7 @@ namespace SpoerStats2.Controllers
                 return StatusCode(500, "Вътрешна грешка на сървъра.");
             }
         }
+
 
 
         [HttpPut("{id}")]
