@@ -179,7 +179,6 @@ namespace SpoerStats2.ClassRepository
                 return result == PasswordVerificationResult.Success ? user : null;
             }
         }
-
         public async Task<IEnumerable<User>> GetUsersByClubId(int clubId)
         {
             using (var connection = new SqlConnection(_connectionString))
@@ -188,8 +187,6 @@ namespace SpoerStats2.ClassRepository
                 return await connection.QueryAsync<User>(query, new { ClubID = clubId });
             }
         }
-
-
         public async Task UpdateUserClubStatus(int userId, int clubId)
         {
             using (var connection = new SqlConnection(_connectionString))
@@ -203,9 +200,6 @@ namespace SpoerStats2.ClassRepository
                 await connection.ExecuteAsync(query, parameters);
             }
         }
-
-
-
         public async Task UpdateFirstName(int id, string firstName)
         {
             using (var connection = new SqlConnection(_connectionString))
@@ -214,7 +208,6 @@ namespace SpoerStats2.ClassRepository
                 await connection.ExecuteAsync(query, new { FirstName = firstName, Id = id });
             }
         }
-
         public async Task UpdateLastName(int id, string lastName)
         {
             using (var connection = new SqlConnection(_connectionString))
@@ -231,7 +224,6 @@ namespace SpoerStats2.ClassRepository
                 await connection.ExecuteAsync(query, new { YearOfBirth = yearOfBirth, Id = id });
             }
         }
-
         public async Task UpdateEmail(int id, string email)
         {
             using (var connection = new SqlConnection(_connectionString))
@@ -240,7 +232,6 @@ namespace SpoerStats2.ClassRepository
                 await connection.ExecuteAsync(query, new { Email = email, Id = id });
             }
         }
-
         public async Task UpdatePassword(int id, string password)
         {
             using (var connection = new SqlConnection(_connectionString))
