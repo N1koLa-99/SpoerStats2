@@ -266,5 +266,59 @@ namespace SpoerStats2.Controllers
             }
         }
 
+        [HttpGet("by-club/{clubId}/by-discipline/{disciplineId}")]
+        public async Task<ActionResult<IEnumerable<UserBestResultDto>>> GetBestResultsByDisciplineInClub(int clubId, int disciplineId)
+        {
+            if (disciplineId <= 0 || clubId <= 0)
+            {
+                return BadRequest("Невалидни входни данни.");
+            }
+
+            try
+            {
+                var clubUsers = await _userService.GetUsersByClubId(clubId);
+                if (clubUsers == null || !clubUsers.Any())
+                {
+                    return NotFound("Няма потребители за този клуб.");
+                }
+
+                var allResults = new List<UserBestResultDto>();
+
+                foreach (var user in clubUsers)
+                {
+                    var userResults = await _resultService.GetResultsByUserIdAndDisciplineId(user.Id, disciplineId);
+                    var bestResult = userResults?
+                        .OrderBy(r => r.ValueTime)
+                        .FirstOrDefault();
+
+                    if (bestResult != null)
+                    {
+                        var dto = new UserBestResultDto
+                        {
+                            Id = bestResult.Id,
+                            UserId = user.Id,
+                            UserFirstName = user.FirstName,
+                            UserLastName = user.LastName,
+                            UserYearOfBirth = user.YearOfBirth,
+                            DisciplineId = bestResult.DisciplineId,
+                            ValueTime = bestResult.ValueTime,
+                            ResultDate = bestResult.ResultDate,
+                            SwimmingPoolStandart = bestResult.SwimmingPoolStandart,
+                            Location = bestResult.Location
+                        };
+
+                        allResults.Add(dto);
+                    }
+                }
+
+                var sortedResults = allResults.OrderBy(r => r.ValueTime).ToList();
+                return Ok(sortedResults);
+            }
+            catch (Exception)
+            {
+                return StatusCode(500, "Вътрешна грешка на сървъра.");
+            }
+        }
+
     }
 }
