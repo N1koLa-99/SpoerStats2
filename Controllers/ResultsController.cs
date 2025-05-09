@@ -11,12 +11,15 @@ namespace SpoerStats2.Controllers
     {
         private readonly ResultService _resultService;
         private readonly UserService _userService;
+        private readonly ClubService _clubService;
 
-        public ResultsController(ResultService resultService, UserService userService)
+        public ResultsController(ResultService resultService, UserService userService, ClubService clubService)
         {
             _resultService = resultService;
             _userService = userService;
+            _clubService = clubService;
         }
+
 
         [HttpGet]
         public async Task<ActionResult<IEnumerable<Result>>> GetResults([Required] int requesterId)
@@ -319,6 +322,76 @@ namespace SpoerStats2.Controllers
                 return StatusCode(500, "Вътрешна грешка на сървъра.");
             }
         }
+        [HttpGet("best-club-by-discipline/{disciplineId}/year/{yearOfBirth}")]
+        public async Task<ActionResult<ClubBestResultByGroupDto>> GetBestClubByDisciplineAndAge(int disciplineId, int yearOfBirth)
+        {
+            if (disciplineId <= 0 || yearOfBirth <= 1900)
+                return BadRequest("Невалидни данни.");
+
+            try
+            {
+                var allUsers = await _userService.GetAllUsers();
+                if (allUsers == null || !allUsers.Any())
+                    return NotFound("Няма потребители в системата.");
+
+                var ageGroups = new Dictionary<string, Func<int, bool>>
+        {
+            { "C", y => y >= 2011 && y <= 2025 },
+            { "B", y => y >= 2008 && y <= 2010 },
+            { "A", y => y >= 1925 && y <= 2007 }
+        };
+
+                var group = ageGroups.FirstOrDefault(g => g.Value(yearOfBirth));
+                if (group.Key == null)
+                    return NotFound("Няма възрастова група за тази година.");
+
+                User bestUser = null;
+                Result bestResult = null;
+
+                foreach (var user in allUsers.Where(u => group.Value(u.YearOfBirth)))
+                {
+                    var results = await _resultService.GetResultsByUserIdAndDisciplineId(user.Id, disciplineId);
+                    var userBest = results?.OrderBy(r => r.ValueTime).FirstOrDefault();
+
+                    if (userBest != null && (bestResult == null || userBest.ValueTime < bestResult.ValueTime))
+                    {
+                        bestUser = user;
+                        bestResult = userBest;
+                    }
+                }
+
+                if (bestUser != null && bestResult != null)
+                {
+                    var club = await _clubService.GetClubById(bestUser.ClubID);
+
+                    var dto = new ClubBestResultDto
+                    {
+                        ClubId = club.Id,
+                        ClubName = club.Name,
+                        UserId = bestUser.Id,
+                        UserFirstName = bestUser.FirstName,
+                        UserLastName = bestUser.LastName,
+                        YearOfBirth = bestUser.YearOfBirth,
+                        ValueTime = bestResult.ValueTime,
+                        ResultDate = bestResult.ResultDate,
+                        Location = bestResult.Location
+                    };
+
+                    return Ok(new ClubBestResultByGroupDto
+                    {
+                        AgeGroup = group.Key,
+                        BestResult = dto
+                    });
+                }
+
+                return NotFound("Няма резултати за тази възрастова група.");
+            }
+            catch (Exception)
+            {
+                return StatusCode(500, "Вътрешна грешка.");
+            }
+        }
+
 
     }
 }
