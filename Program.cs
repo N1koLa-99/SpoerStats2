@@ -21,7 +21,9 @@ namespace SpoerStats2
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen();
 
-            // Register services and repositories
+            // ================================
+            // Register repositories
+            // ================================
             builder.Services.AddScoped<IUserRepository, UserRepository>();
             builder.Services.AddScoped<IClubRepository, ClubRepository>();
             builder.Services.AddScoped<IDisciplineRepository, DisciplineRepository>();
@@ -32,12 +34,15 @@ namespace SpoerStats2
             builder.Services.AddScoped<IRoleRepository, RoleRepository>();
             builder.Services.AddScoped<IClubDisciplineRepository, ClubDisciplineRepository>();
 
-            // Register sports-related services and repositories
+            // Sports
             builder.Services.AddScoped<ISportRepository, SportRepository>();
-            builder.Services.AddScoped<SportService>();
 
-            // Register additional services
-            builder.Services.AddScoped<RoleService>();
+            // Chat (новите зависимости)
+            builder.Services.AddScoped<IMessageRepository, MessageRepository>();
+
+            // ================================
+            // Register services
+            // ================================
             builder.Services.AddScoped<UserService>();
             builder.Services.AddScoped<ClubService>();
             builder.Services.AddScoped<DisciplineService>();
@@ -45,13 +50,22 @@ namespace SpoerStats2
             builder.Services.AddScoped<RankingService>();
             builder.Services.AddScoped<NormativeService>();
             builder.Services.AddScoped<RankService>();
+            builder.Services.AddScoped<RoleService>();
+            builder.Services.AddScoped<SportService>();
             builder.Services.AddScoped<ClubDisciplineService>();
 
+            // Chat service
+            builder.Services.AddScoped<MessageService>();
+
+            // ================================
             // Register DbConnection
+            // ================================
             builder.Services.AddScoped<IDbConnection>(sp =>
                 new SqlConnection(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-
+            // ================================
+            // Configure CORS
+            // ================================
             builder.Services.AddCors(options =>
             {
                 options.AddPolicy("AllowAll",
