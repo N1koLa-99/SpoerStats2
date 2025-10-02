@@ -63,11 +63,22 @@ namespace SpoerStats2.ClassRepository
         public async Task<int> AddMessage(TeamMessage message)
         {
             using var connection = new SqlConnection(_connectionString);
-            var sql = @"INSERT INTO TeamMessages (TeamId, SenderId, Content, CreatedAt)
-                        VALUES (@TeamId, @SenderId, @Content, GETDATE());
-                        SELECT CAST(SCOPE_IDENTITY() as int);";
-            return await connection.ExecuteScalarAsync<int>(sql, message);
+
+            // Вариант А: подаваме CreatedAt от C# (вече е DateTimeOffset.UtcNow)
+            const string sql = @"
+INSERT INTO dbo.TeamMessages (TeamId, SenderId, Content, CreatedAt)
+VALUES (@TeamId, @SenderId, @Content, @CreatedAt);
+SELECT CAST(SCOPE_IDENTITY() as int);";
+
+            return await connection.ExecuteScalarAsync<int>(sql, new
+            {
+                message.TeamId,
+                message.SenderId,
+                message.Content,
+                message.CreatedAt // DateTimeOffset (UTC)
+            });
         }
+
 
         public async Task AddAttachment(MessageAttachment attachment)
         {

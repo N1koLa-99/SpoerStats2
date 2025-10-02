@@ -14,7 +14,13 @@ public class MessageService
         => _messageRepository.GetMessagesByTeam(teamId);
 
     public Task<int> SendMessage(TeamMessage message)
-        => _messageRepository.AddMessage(message);
+    {
+        if (message.CreatedAt == default)
+            message.CreatedAt = DateTimeOffset.UtcNow;
+
+        return _messageRepository.AddMessage(message);
+    }
+
 
     public Task AddAttachment(MessageAttachment attachment)
         => _messageRepository.AddAttachment(attachment);

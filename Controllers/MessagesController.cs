@@ -38,16 +38,18 @@ namespace SpoerStats2.Controllers
 
         // НОВО: Създава съобщение + качва файлове (multipart/form-data)
         [HttpPost("send")]
-        [RequestSizeLimit(60_000_000)] // ~60MB общо на заявката
+        [RequestSizeLimit(60_000_000)]
         public async Task<ActionResult> Send([FromForm] SendMessageRequest form, CancellationToken ct)
         {
-            // TODO: в прод да взимаш SenderId от JWT, не от формата
-            var msgId = await _messageService.SendMessage(new TeamMessage
+            var msg = new TeamMessage
             {
                 TeamId = form.TeamId,
                 SenderId = form.SenderId,
-                Content = form.Content
-            });
+                Content = form.Content,
+                CreatedAt = DateTimeOffset.UtcNow // <-- важно
+            };
+
+            var msgId = await _messageService.SendMessage(msg);
 
             if (form.Files is { Count: > 0 })
             {
@@ -78,13 +80,18 @@ namespace SpoerStats2.Controllers
             return Ok(new { messageId = msgId });
         }
 
+
         // (По избор) Старият JSON endpoint може да остане за back-compat
         [HttpPost]
         public async Task<ActionResult> SendMessage([FromBody] TeamMessage message)
         {
+            if (message.CreatedAt == default)
+                message.CreatedAt = DateTimeOffset.UtcNow;
+
             var newId = await _messageService.SendMessage(message);
             return Ok(new { messageId = newId });
         }
+
 
         // (По избор) ако държиш да добавяш прикачени по-късно чрез JSON URL
         [HttpPost("{messageId}/attachments")]

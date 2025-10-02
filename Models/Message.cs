@@ -11,10 +11,12 @@ namespace SpoerStats2.Models
         public int TeamId { get; set; }
         public int SenderId { get; set; }
         public string? Content { get; set; }
-        public DateTime CreatedAt { get; set; }
+
+        // ÁÅØÅ: DateTime
+        public DateTimeOffset CreatedAt { get; set; }
+
         public List<MessageAttachment> Attachments { get; set; } = new();
 
-        // ÍÎÂÎ: èìå íà ïîäàòåëÿ
         public string? SenderFirstName { get; set; }
         public string? SenderLastName { get; set; }
     }
