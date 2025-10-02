@@ -1,12 +1,18 @@
+using Azure.Storage.Blobs;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Data.SqlClient; // препоръчителният клиент
+using System.Data;
+
+// Repo/Service слоеве
 using SpoerStats2.ClassRepository;
 using SpoerStats2.IRepository;
 using SpoerStats2.Repository;
 using SpoerStats2.Service;
-using System.Data;
-using System.Data.SqlClient;
+using SpoerStats2.Services; // BlobStorageService
 
 namespace SpoerStats2
 {
@@ -16,14 +22,40 @@ namespace SpoerStats2
         {
             var builder = WebApplication.CreateBuilder(args);
 
-            // Add services to the container.
+            // ========= Controllers / Swagger =========
             builder.Services.AddControllers();
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen();
 
-            // ================================
-            // Register repositories
-            // ================================
+            // ========= Connection strings =========
+            var sqlConnStr = builder.Configuration.GetConnectionString("DefaultConnection");
+            var blobConnStr = builder.Configuration.GetConnectionString("AzureBlob");
+
+            if (string.IsNullOrWhiteSpace(sqlConnStr))
+                throw new InvalidOperationException(
+                    "Missing connection string 'DefaultConnection'. " +
+                    "Set it in Azure → App Service → Environment variables → Connection strings или локално в User Secrets.");
+
+            if (string.IsNullOrWhiteSpace(blobConnStr))
+                throw new InvalidOperationException(
+                    "Missing connection string 'AzureBlob'. " +
+                    "Set it в Azure → Environment variables → Connection strings или локално в User Secrets.");
+
+            // ========= Infra: SQL (Dapper) =========
+            builder.Services.AddScoped<IDbConnection>(_ => new SqlConnection(sqlConnStr));
+
+            // ========= Infra: Blob =========
+            // Ако преминеш на Managed Identity, тук ще ползваш конструктора с Uri + DefaultAzureCredential().
+            builder.Services.AddSingleton(_ => new BlobServiceClient(blobConnStr));
+            builder.Services.AddScoped<BlobStorageService>();
+
+            // ========= Multipart ограничения =========
+            builder.Services.Configure<FormOptions>(o =>
+            {
+                o.MultipartBodyLengthLimit = 60L * 1024 * 1024; // 60 MB
+            });
+
+            // ========= Репозитории =========
             builder.Services.AddScoped<IUserRepository, UserRepository>();
             builder.Services.AddScoped<IClubRepository, ClubRepository>();
             builder.Services.AddScoped<IDisciplineRepository, DisciplineRepository>();
@@ -33,16 +65,10 @@ namespace SpoerStats2
             builder.Services.AddScoped<IRankRepository, RankRepository>();
             builder.Services.AddScoped<IRoleRepository, RoleRepository>();
             builder.Services.AddScoped<IClubDisciplineRepository, ClubDisciplineRepository>();
-
-            // Sports
             builder.Services.AddScoped<ISportRepository, SportRepository>();
-
-            // Chat (новите зависимости)
             builder.Services.AddScoped<IMessageRepository, MessageRepository>();
 
-            // ================================
-            // Register services
-            // ================================
+            // ========= Сервизи =========
             builder.Services.AddScoped<UserService>();
             builder.Services.AddScoped<ClubService>();
             builder.Services.AddScoped<DisciplineService>();
@@ -53,32 +79,20 @@ namespace SpoerStats2
             builder.Services.AddScoped<RoleService>();
             builder.Services.AddScoped<SportService>();
             builder.Services.AddScoped<ClubDisciplineService>();
-
-            // Chat service
             builder.Services.AddScoped<MessageService>();
 
-            // ================================
-            // Register DbConnection
-            // ================================
-            builder.Services.AddScoped<IDbConnection>(sp =>
-                new SqlConnection(builder.Configuration.GetConnectionString("DefaultConnection")));
-
-            // ================================
-            // Configure CORS
-            // ================================
+            // ========= CORS =========
             builder.Services.AddCors(options =>
             {
-                options.AddPolicy("AllowAll",
-                    policy =>
-                    {
-                        policy.AllowAnyOrigin()
-                              .AllowAnyMethod()
-                              .AllowAnyHeader();
-                    });
+                options.AddPolicy("AllowAll", policy =>
+                    policy.AllowAnyOrigin()
+                          .AllowAnyMethod()
+                          .AllowAnyHeader());
             });
 
             var app = builder.Build();
 
+            // ========= Pipeline =========
             if (app.Environment.IsDevelopment())
             {
                 app.UseSwagger();
@@ -89,6 +103,7 @@ namespace SpoerStats2
 
             app.UseCors("AllowAll");
 
+            // Ако нямаш конфигуриран authentication handler, махни следващия ред.
             app.UseAuthentication();
             app.UseAuthorization();
 

@@ -13,6 +13,10 @@ namespace SpoerStats2.Models
         public string? Content { get; set; }
         public DateTime CreatedAt { get; set; }
         public List<MessageAttachment> Attachments { get; set; } = new();
+
+        // НОВО: име на подателя
+        public string? SenderFirstName { get; set; }
+        public string? SenderLastName { get; set; }
     }
 
     public class MessageAttachment

@@ -17,35 +17,48 @@ namespace SpoerStats2.ClassRepository
         public async Task<IEnumerable<TeamMessage>> GetMessagesByTeam(int teamId)
         {
             using var connection = new SqlConnection(_connectionString);
-            var sql = @"SELECT m.Id, m.TeamId, m.SenderId, m.Content, m.CreatedAt,
-                               a.Id, a.MessageId, a.FileUrl, a.FileType
-                        FROM TeamMessages m
-                        LEFT JOIN MessageAttachments a ON m.Id = a.MessageId
-                        WHERE m.TeamId = @TeamId
-                        ORDER BY m.CreatedAt ASC";
 
-            var messageDict = new Dictionary<int, TeamMessage>();
+            // 1) Съобщения + имена (JOIN към таблицата с потребители)
+            // Смени [Users] с реалното име на таблицата ти (напр. AspNetUsers), и колоните FirstName/LastName според схемата ти.
+            var sqlMessages = @"
+        SELECT
+            m.Id, m.TeamId, m.SenderId, m.Content, m.CreatedAt,
+            u.FirstName AS SenderFirstName,
+            u.LastName  AS SenderLastName
+        FROM TeamMessages m
+        LEFT JOIN [Users] u ON u.Id = m.SenderId
+        WHERE m.TeamId = @TeamId
+        ORDER BY m.CreatedAt ASC;";
 
-            var list = await connection.QueryAsync<TeamMessage, MessageAttachment, TeamMessage>(
-                sql,
-                (msg, att) =>
-                {
-                    if (!messageDict.TryGetValue(msg.Id, out var currentMsg))
-                    {
-                        currentMsg = msg;
-                        currentMsg.Attachments = new List<MessageAttachment>();
-                        messageDict.Add(currentMsg.Id, currentMsg);
-                    }
-                    if (att != null)
-                        currentMsg.Attachments.Add(att);
+            var messages = (await connection.QueryAsync<TeamMessage>(sqlMessages, new { TeamId = teamId }))
+                            .ToList();
 
-                    return currentMsg;
-                },
-                new { TeamId = teamId }
-            );
+            if (messages.Count == 0) return messages;
 
-            return messageDict.Values;
+            // 2) Всички прикачени за тези съобщения в един удар
+            var msgIds = messages.Select(x => x.Id).ToArray();
+
+            var sqlAtt = @"
+        SELECT Id, MessageId, FileUrl, FileType
+        FROM MessageAttachments
+        WHERE MessageId IN @Ids
+        ORDER BY Id ASC;";
+
+            var atts = await connection.QueryAsync<MessageAttachment>(sqlAtt, new { Ids = msgIds });
+
+            // 3) Разпределяме по съобщения
+            var attLookup = atts.GroupBy(a => a.MessageId)
+                                .ToDictionary(g => g.Key, g => g.ToList());
+
+            foreach (var m in messages)
+            {
+                if (attLookup.TryGetValue(m.Id, out var list))
+                    m.Attachments = list;
+            }
+
+            return messages;
         }
+
 
         public async Task<int> AddMessage(TeamMessage message)
         {
