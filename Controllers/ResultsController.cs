@@ -20,7 +20,6 @@ namespace SpoerStats2.Controllers
             _clubService = clubService;
         }
 
-
         [HttpGet]
         public async Task<ActionResult<IEnumerable<Result>>> GetResults([Required] int requesterId)
         {
@@ -34,7 +33,7 @@ namespace SpoerStats2.Controllers
                 int roleId = user.RoleID;
                 int clubId = user.ClubID;
 
-                var results = roleId == 2
+                var results = (roleId == 2 || roleId == 3)
                     ? await _resultService.GetResultsForClub(clubId)
                     : await _resultService.GetResultsForUser(requesterId, roleId, clubId);
 
@@ -69,7 +68,7 @@ namespace SpoerStats2.Controllers
             }
             catch
             {
-                return StatusCode(500, "Internal server error.");
+                return StatusCode(500, "Вътрешна грешка на сървъра.");
             }
         }
 
@@ -97,7 +96,7 @@ namespace SpoerStats2.Controllers
             {
                 var user = await _userService.GetUserById(requesterId);
                 if (user == null) return NotFound("Потребителят не е намерен.");
-                if (roleId != 2) return Forbid("Само треньори могат да добавят резултати.");
+                if (roleId != 2 && roleId != 3) return Forbid("Само треньори и администратори могат да добавят резултати.");
 
                 await _resultService.AddResult(result, requesterId, roleId, clubId);
                 return CreatedAtAction(nameof(GetResult), new { id = result.Id }, result);
@@ -115,8 +114,6 @@ namespace SpoerStats2.Controllers
                 return StatusCode(500, "Вътрешна грешка на сървъра.");
             }
         }
-
-
 
         [HttpPut("{id}")]
         public async Task<IActionResult> PutResult(int id, [FromBody] Result result)
@@ -146,7 +143,7 @@ namespace SpoerStats2.Controllers
             {
                 var user = await _userService.GetUserById(requesterId);
                 if (user == null) return NotFound("Потребителят не е намерен.");
-                if (roleId != 2) return Forbid("Само треньори могат да редактират резултати.");
+                if (roleId != 2 && roleId != 3) return Forbid("Само треньори и администратори могат да редактират резултати.");
 
                 await _resultService.UpdateResult(result, requesterId, roleId, clubId);
                 return NoContent();
@@ -164,7 +161,6 @@ namespace SpoerStats2.Controllers
                 return StatusCode(500, "Вътрешна грешка на сървъра.");
             }
         }
-
 
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteResult(int id)
@@ -194,9 +190,10 @@ namespace SpoerStats2.Controllers
                 if (result == null)
                     return NotFound("Резултатът не е намерен.");
 
-                if (roleId != 2) // Само треньори (RoleID = 2) могат да трият резултати
+                // Само треньори или администратори (RoleID = 2 или 3) могат да трият резултати
+                if (roleId != 2 && roleId != 3)
                 {
-                    return Forbid("Само треньори могат да изтриват резултати.");
+                    return Forbid("Само треньори и администратори могат да изтриват резултати.");
                 }
 
                 await _resultService.DeleteResult(id, requesterId, roleId, clubId);
@@ -212,10 +209,9 @@ namespace SpoerStats2.Controllers
             }
             catch
             {
-                return StatusCode(500, "Internal server error.");
+                return StatusCode(500, "Вътрешна грешка на сървъра.");
             }
         }
-
 
         [HttpGet("by-user/{userId}/by-discipline/{disciplineId}")]
         public async Task<ActionResult<IEnumerable<Result>>> GetResultsByUserIdAndDisciplineId(int userId, int disciplineId)
@@ -250,7 +246,8 @@ namespace SpoerStats2.Controllers
                     return Forbid("Нямате достъп до този потребител.");
                 }
 
-                if (requester.RoleID != 2 && requesterId != userId)
+                // Позволява се на RoleID 2 или 3, или на самия потребител
+                if (requester.RoleID != 2 && requester.RoleID != 3 && requesterId != userId)
                 {
                     return Forbid("Нямате права да виждате тези резултати.");
                 }
@@ -263,7 +260,7 @@ namespace SpoerStats2.Controllers
 
                 return Ok(results);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 return StatusCode(500, "Вътрешна грешка на сървъра.");
             }
@@ -322,6 +319,7 @@ namespace SpoerStats2.Controllers
                 return StatusCode(500, "Вътрешна грешка на сървъра.");
             }
         }
+
         [HttpGet("best-club-by-discipline/{disciplineId}/year/{yearOfBirth}")]
         public async Task<ActionResult<ClubBestResultByGroupDto>> GetBestClubByDisciplineAndAge(int disciplineId, int yearOfBirth)
         {
@@ -335,11 +333,11 @@ namespace SpoerStats2.Controllers
                     return NotFound("Няма потребители в системата.");
 
                 var ageGroups = new Dictionary<string, Func<int, bool>>
-        {
-            { "C", y => y >= 2011 && y <= 2025 },
-            { "B", y => y >= 2008 && y <= 2010 },
-            { "A", y => y >= 1925 && y <= 2007 }
-        };
+                {
+                    { "C", y => y >= 2011 && y <= 2025 },
+                    { "B", y => y >= 2008 && y <= 2010 },
+                    { "A", y => y >= 1925 && y <= 2007 }
+                };
 
                 var group = ageGroups.FirstOrDefault(g => g.Value(yearOfBirth));
                 if (group.Key == null)
@@ -391,7 +389,6 @@ namespace SpoerStats2.Controllers
                 return StatusCode(500, "Вътрешна грешка.");
             }
         }
-
-
     }
 }
+// върни ми целия редактиран код като направим така че освен потребителите с RoleID = 2 и потребители с RoleID = 3 да могат да боравят. Върни ми целия редакиран код

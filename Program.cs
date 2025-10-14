@@ -7,12 +7,15 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Data.SqlClient; // препоръчителният клиент
 using System.Data;
 
-// Repo/Service слоеве
+// Repo/Service слоеве (съществуващи)
 using SpoerStats2.ClassRepository;
 using SpoerStats2.IRepository;
 using SpoerStats2.Repository;
 using SpoerStats2.Service;
 using SpoerStats2.Services; // BlobStorageService
+
+// ==== Новите по плана (интерфейси/репота/сервиси, които добавихме) ====
+// (в зависимост от твоите namespace-и може да са вече покрити от горните using-и)
 
 namespace SpoerStats2
 {
@@ -23,7 +26,13 @@ namespace SpoerStats2
             var builder = WebApplication.CreateBuilder(args);
 
             // ========= Controllers / Swagger =========
-            builder.Services.AddControllers();
+            builder.Services.AddControllers()
+                .AddJsonOptions(o =>
+                {
+                    // Пази PascalCase като в моделите (Dapper мапва по имена 1:1)
+                    o.JsonSerializerOptions.PropertyNamingPolicy = null;
+                });
+
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen();
 
@@ -42,6 +51,8 @@ namespace SpoerStats2
                     "Set it в Azure → Environment variables → Connection strings или локално в User Secrets.");
 
             // ========= Infra: SQL (Dapper) =========
+            // Някои от нашите репота ползват IConfiguration + new SqlConnection(...)
+            // Оставяме и IDbConnection, ако някъде го инжектираш директно.
             builder.Services.AddScoped<IDbConnection>(_ => new SqlConnection(sqlConnStr));
 
             // ========= Infra: Blob =========
@@ -55,7 +66,7 @@ namespace SpoerStats2
                 o.MultipartBodyLengthLimit = 60L * 1024 * 1024; // 60 MB
             });
 
-            // ========= Репозитории =========
+            // ========= Репозитории (съществуващи) =========
             builder.Services.AddScoped<IUserRepository, UserRepository>();
             builder.Services.AddScoped<IClubRepository, ClubRepository>();
             builder.Services.AddScoped<IDisciplineRepository, DisciplineRepository>();
@@ -68,7 +79,7 @@ namespace SpoerStats2
             builder.Services.AddScoped<ISportRepository, SportRepository>();
             builder.Services.AddScoped<IMessageRepository, MessageRepository>();
 
-            // ========= Сервизи =========
+            // ========= Сервизи (съществуващи) =========
             builder.Services.AddScoped<UserService>();
             builder.Services.AddScoped<ClubService>();
             builder.Services.AddScoped<DisciplineService>();
@@ -80,6 +91,32 @@ namespace SpoerStats2
             builder.Services.AddScoped<SportService>();
             builder.Services.AddScoped<ClubDisciplineService>();
             builder.Services.AddScoped<MessageService>();
+
+            // ========= Нови по плана: сезони/цени/групи/слотове/избори/плащания =========
+
+            // Seasons + Billing Months
+            builder.Services.AddScoped<ISeasonRepository, SeasonRepository>();
+            builder.Services.AddScoped<SeasonService>();
+
+            // Club Fee Plans
+            builder.Services.AddScoped<IClubFeePlanRepository, ClubFeePlanRepository>();
+            builder.Services.AddScoped<FeePlanService>();
+
+            // Training Groups
+            builder.Services.AddScoped<ITrainingGroupRepository, TrainingGroupRepository>();
+            builder.Services.AddScoped<TrainingGroupService>();
+
+            // Schedule Slots
+            builder.Services.AddScoped<IScheduleSlotRepository, ScheduleSlotRepository>();
+            builder.Services.AddScoped<ScheduleSlotService>();
+
+            // Athlete Slot Selections
+            builder.Services.AddScoped<IAthleteSelectionRepository, AthleteSelectionRepository>();
+            builder.Services.AddScoped<AthleteSelectionService>();
+
+            // Payments
+            builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
+            builder.Services.AddScoped<PaymentService>();
 
             // ========= CORS =========
             builder.Services.AddCors(options =>
@@ -103,8 +140,8 @@ namespace SpoerStats2
 
             app.UseCors("AllowAll");
 
-            // Ако нямаш конфигуриран authentication handler, махни следващия ред.
-            app.UseAuthentication();
+            // Ако НЯМА конфигуриран authentication handler, коментирай следния ред.
+            // app.UseAuthentication();
             app.UseAuthorization();
 
             app.MapControllers();

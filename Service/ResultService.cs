@@ -15,6 +15,9 @@ public class ResultService
         _userRepository = userRepository;
     }
 
+    // Helper: роли 2 и 3 имат права за клуб (coach/manager)
+    private static bool IsCoachOrManager(int roleId) => roleId == 2 || roleId == 3;
+
     public async Task<IEnumerable<Result>> GetAllResults()
     {
         return await _resultRepository.GetAllResults();
@@ -28,7 +31,7 @@ public class ResultService
             throw new KeyNotFoundException("Резултатът не е намерен.");
         }
 
-        if (roleId == 2) // Coach
+        if (IsCoachOrManager(roleId))
         {
             var targetUser = await _userRepository.GetUserById(result.UserId);
             if (targetUser == null || targetUser.ClubID != clubId)
@@ -43,6 +46,7 @@ public class ResultService
 
         return result;
     }
+
     public async Task<IEnumerable<Result>> GetResultsForClub(int clubId)
     {
         var clubUsers = await _userRepository.GetUsersByClubId(clubId);
@@ -51,11 +55,9 @@ public class ResultService
         return await _resultRepository.GetResultsByUserIds(userIds);
     }
 
-
-
     public async Task<IEnumerable<Result>> GetResultsForUser(int requesterId, int roleId, int clubId, int? targetUserId = null)
     {
-        if (roleId == 2) // Coach
+        if (IsCoachOrManager(roleId))
         {
             if (targetUserId.HasValue)
             {
@@ -89,7 +91,7 @@ public class ResultService
             throw new ArgumentException("Невалидна стойност за време.");
         }
 
-        if (roleId == 2)
+        if (IsCoachOrManager(roleId))
         {
             var targetUser = await _userRepository.GetUserById(result.UserId);
             if (targetUser == null || targetUser.ClubID != clubId)
@@ -113,7 +115,7 @@ public class ResultService
             throw new KeyNotFoundException("Резултатът не е намерен.");
         }
 
-        if (roleId == 2)
+        if (IsCoachOrManager(roleId))
         {
             var targetUser = await _userRepository.GetUserById(existingResult.UserId);
             if (targetUser == null || targetUser.ClubID != clubId)
@@ -137,7 +139,7 @@ public class ResultService
             throw new KeyNotFoundException("Резултатът не е намерен.");
         }
 
-        if (roleId == 2)
+        if (IsCoachOrManager(roleId))
         {
             var targetUser = await _userRepository.GetUserById(result.UserId);
             if (targetUser == null || targetUser.ClubID != clubId)
