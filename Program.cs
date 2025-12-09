@@ -1,6 +1,7 @@
 using Azure.Storage.Blobs;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -13,9 +14,6 @@ using SpoerStats2.IRepository;
 using SpoerStats2.Repository;
 using SpoerStats2.Service;
 using SpoerStats2.Services; // BlobStorageService
-
-// ==== Новите по плана (интерфейси/репота/сервиси, които добавихме) ====
-// (в зависимост от твоите namespace-и може да са вече покрити от горните using-и)
 
 namespace SpoerStats2
 {
@@ -43,20 +41,17 @@ namespace SpoerStats2
             if (string.IsNullOrWhiteSpace(sqlConnStr))
                 throw new InvalidOperationException(
                     "Missing connection string 'DefaultConnection'. " +
-                    "Set it in Azure → App Service → Environment variables → Connection strings или локално в User Secrets.");
+                    "Set it в Azure → App Service → Configuration → Connection strings или локално в User Secrets.");
 
             if (string.IsNullOrWhiteSpace(blobConnStr))
                 throw new InvalidOperationException(
                     "Missing connection string 'AzureBlob'. " +
-                    "Set it в Azure → Environment variables → Connection strings или локално в User Secrets.");
+                    "Set it в Azure → Configuration → Connection strings или локално в User Secrets.");
 
             // ========= Infra: SQL (Dapper) =========
-            // Някои от нашите репота ползват IConfiguration + new SqlConnection(...)
-            // Оставяме и IDbConnection, ако някъде го инжектираш директно.
             builder.Services.AddScoped<IDbConnection>(_ => new SqlConnection(sqlConnStr));
 
             // ========= Infra: Blob =========
-            // Ако преминеш на Managed Identity, тук ще ползваш конструктора с Uri + DefaultAzureCredential().
             builder.Services.AddSingleton(_ => new BlobServiceClient(blobConnStr));
             builder.Services.AddScoped<BlobStorageService>();
 
@@ -93,54 +88,77 @@ namespace SpoerStats2
             builder.Services.AddScoped<MessageService>();
 
             // ========= Нови по плана: сезони/цени/групи/слотове/избори/плащания =========
-
-            // Seasons + Billing Months
             builder.Services.AddScoped<ISeasonRepository, SeasonRepository>();
             builder.Services.AddScoped<SeasonService>();
 
-            // Club Fee Plans
             builder.Services.AddScoped<IClubFeePlanRepository, ClubFeePlanRepository>();
             builder.Services.AddScoped<FeePlanService>();
 
-            // Training Groups
             builder.Services.AddScoped<ITrainingGroupRepository, TrainingGroupRepository>();
             builder.Services.AddScoped<TrainingGroupService>();
 
-            // Schedule Slots
             builder.Services.AddScoped<IScheduleSlotRepository, ScheduleSlotRepository>();
             builder.Services.AddScoped<ScheduleSlotService>();
 
-            // Athlete Slot Selections
             builder.Services.AddScoped<IAthleteSelectionRepository, AthleteSelectionRepository>();
             builder.Services.AddScoped<AthleteSelectionService>();
 
-            // Payments
             builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
             builder.Services.AddScoped<PaymentService>();
 
+            // ========= НОВО: Чатове =========
+            builder.Services.AddScoped<IChatRepository, ChatRepository>(); // Dapper repo за чатове
+            builder.Services.AddScoped<ChatService>();                     // Сервиз за чатове
+
             // ========= CORS =========
+            // Чете позволените фронтенд адреси от Cors:AllowedOrigins (CSV).
+            // Пример: "https://sportstatsbg.com,https://www.sportstatsbg.com,https://<storage>.z13.web.core.windows.net"
+            var allowedOrigins = (builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ??
+                                  (builder.Configuration["Cors:AllowedOrigins"] ?? "")
+                                     .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                                 .Where(s => !string.IsNullOrWhiteSpace(s))
+                                 .ToArray();
+
             builder.Services.AddCors(options =>
             {
-                options.AddPolicy("AllowAll", policy =>
-                    policy.AllowAnyOrigin()
-                          .AllowAnyMethod()
-                          .AllowAnyHeader());
+                options.AddPolicy("Frontend", policy =>
+                {
+                    if (allowedOrigins.Length > 0)
+                    {
+                        policy.WithOrigins(allowedOrigins)
+                              .AllowAnyMethod()
+                              .AllowAnyHeader();
+                        // Ако ще ползваш cookies/credentials, добави: .AllowCredentials();
+                    }
+                    else
+                    {
+                        // DEV fallback – не оставяй така в Production.
+                        policy.AllowAnyOrigin()
+                              .AllowAnyMethod()
+                              .AllowAnyHeader();
+                    }
+                });
             });
 
             var app = builder.Build();
 
             // ========= Pipeline =========
-            if (app.Environment.IsDevelopment())
+            // За да уважава X-Forwarded-Proto/For от Azure Front Door / App Service
+            app.UseForwardedHeaders(new ForwardedHeadersOptions
             {
-                app.UseSwagger();
-                app.UseSwaggerUI();
-            }
+                ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+            });
+
+            // Swagger – полезен и в Production зад защитен URL/slot
+            app.UseSwagger();
+            app.UseSwaggerUI();
 
             app.UseHttpsRedirection();
 
-            app.UseCors("AllowAll");
+            // CORS преди AuthZ
+            app.UseCors("Frontend");
 
-            // Ако НЯМА конфигуриран authentication handler, коментирай следния ред.
+            // Ако НЯМА конфигуриран authentication handler, дръж коментиран реда по-долу.
             // app.UseAuthentication();
             app.UseAuthorization();
 
