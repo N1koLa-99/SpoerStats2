@@ -1,9 +1,13 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using SpoerStats2.Models;
-using System.Security.Claims;
+using SpoerStats2.Service;
 using System.IO;
-using Microsoft.AspNetCore.Identity;
-using Microsoft.AspNetCore.Identity.Data;
+using System.Linq;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace SpoerStats2.Controllers
 {
@@ -20,82 +24,106 @@ namespace SpoerStats2.Controllers
             _logger = logger;
         }
 
+        private static bool IsCoachOrAdmin(int roleId) => roleId == 2 || roleId == 3;
+
+        // ✅ минимална защита: не връщаме чувствителни неща
+        private static User Sanitize(User u)
+        {
+            if (u == null) return u;
+            u.Password = null;
+            u.AccessCode = null;
+            // по желание:
+            // u.SwimrankingsMeetCache = null;
+            return u;
+        }
+
+        // =========================
+        // DTOs (granular updates)
+        // =========================
+        public sealed class UpdateFirstNameDto { public string FirstName { get; set; } = ""; }
+        public sealed class UpdateLastNameDto { public string LastName { get; set; } = ""; }
+        public sealed class UpdateGenderDto { public string Gender { get; set; } = ""; }
+        public sealed class UpdateYearDto { public int YearOfBirth { get; set; } }
+
+        public sealed class ChangePasswordDto
+        {
+            public string OldPassword { get; set; } = "";
+            public string NewPassword { get; set; } = "";
+        }
+
+        public sealed class ChangeEmailDto
+        {
+            public string NewEmail { get; set; } = "";
+            public string Password { get; set; } = "";
+        }
+
+        // =========================
+        // BASIC GETs
+        // =========================
         [HttpGet("all")]
         public async Task<ActionResult<IEnumerable<User>>> GetAllUsers()
         {
             var users = await _userService.GetAllUsers();
-            return Ok(users); // Връща всички потребители
+            return Ok(users.Select(Sanitize).ToList());
         }
 
         [HttpGet("approved")]
         public async Task<ActionResult<IEnumerable<User>>> GetApprovedUsers()
         {
             var users = await _userService.GetAllUsers();
-            var acceptedUsers = users.Where(u => u.StatusID == 2).ToList();
-
-            return Ok(acceptedUsers); // Връща само одобрените потребители
+            var acceptedUsers = users.Where(u => u.StatusID == 2).Select(Sanitize).ToList();
+            return Ok(acceptedUsers);
         }
-
-
 
         [HttpGet("{id}")]
         public async Task<ActionResult<User>> GetUser(int id)
         {
             var user = await _userService.GetUserById(id);
             if (user == null) return NotFound();
-            return Ok(user);
+            return Ok(Sanitize(user));
         }
 
+        [HttpGet("me")]
+        public async Task<ActionResult<User>> GetMe()
+        {
+            try
+            {
+                var userId = GetUserIdFromSession();
+                var user = await _userService.GetUserById(userId);
+                if (user == null) return NotFound();
+                return Ok(Sanitize(user));
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return Unauthorized(new { message = ex.Message });
+            }
+        }
+
+        // =========================
+        // REGISTER
+        // =========================
         [HttpPost]
         public async Task<ActionResult<User>> PostUser(User user)
         {
             await _userService.AddUser(user);
 
-            if (user.Id <= 0) // Проверка за валидност на ID
-            {
+            if (user.Id <= 0)
                 return BadRequest("Неуспешно създаване на потребител. ID е невалидно.");
-            }
 
             var userSession = new UserSession(user);
+
             var response = new
             {
-                user,
-                userTokenHash = userSession.GetUserTokenHash()
+                user = Sanitize(user),
+                userTokenHash = userSession.UserTokenHash
             };
 
             return CreatedAtAction("GetUser", new { id = user.Id }, response);
         }
 
-
-
-        [HttpPut("{id}")]
-        public async Task<IActionResult> UpdateUser(int id, [FromBody] User user)
-        {
-            if (id != user.Id)
-            {
-                return BadRequest("User ID mismatch.");
-            }
-
-            var existingUser = await _userService.GetUserById(id);
-            if (existingUser == null)
-            {
-                return NotFound("User not found.");
-            }
-
-            try
-            {
-                await _userService.UpdateUser(user);
-                return Ok(user);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error updating user with ID {Id}.", id);
-                return StatusCode(500, "Internal server error.");
-            }
-        }
-
-
-
+        // =========================
+        // DELETE
+        // =========================
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteUser(int id)
         {
@@ -105,51 +133,119 @@ namespace SpoerStats2.Controllers
             return NoContent();
         }
 
+        // =========================
+        // LOGIN
+        // =========================
         [HttpPost("login")]
-        public async Task<ActionResult<User>> Login([FromBody] UserLogin loginData)
+        public async Task<ActionResult> Login([FromBody] UserLogin loginData)
         {
             var user = await _userService.GetUserByEmailAndPassword(loginData.Email, loginData.Password);
-            if (user == null)
-            {
-                return Unauthorized();
-            }
-            UserSession result = new UserSession(user);
-            result.UserTokenHash = result.GetUserTokenHash();
-            return Ok(result);
+            if (user == null) return Unauthorized();
+
+            HttpContext.Session.SetInt32("uid", user.Id);
+
+            var athleteDisplay = BuildAthleteDisplayName(user);
+            HttpContext.Session.SetString("athleteDisplay", athleteDisplay);
+
+            var result = new UserSession(user); // ✅ hash е сетнат в ctor
+            return Ok(new { session = result, athleteDisplay });
         }
 
-
-
-        private int GetUserIdFromToken()
+        public sealed class SwridLoginDto
         {
-            var userIdClaim = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier);
-            if (userIdClaim == null)
-            {
-                throw new UnauthorizedAccessException("Token does not contain user ID.");
-            }
-            var userId = int.Parse(userIdClaim.Value);
-            _logger.LogInformation("Получен userId от токена: {userId}", userId);
-            return userId;
+            public string Swrid { get; set; } = "";
         }
 
-        [HttpGet("me")]
-        public async Task<ActionResult<User>> GetCurrentUser()
+        [HttpPost("login-swrid")]
+        public async Task<ActionResult> LoginBySwrid([FromBody] SwridLoginDto dto)
+        {
+            var user = await _userService.GetUserBySwridLogin(dto?.Swrid ?? "");
+            if (user == null) return Unauthorized("Invalid SWRID.");
+
+            HttpContext.Session.SetInt32("uid", user.Id);
+
+            var athleteDisplay = BuildAthleteDisplayName(user);
+            HttpContext.Session.SetString("athleteDisplay", athleteDisplay);
+
+            var result = new UserSession(user); // ✅ hash е сетнат в ctor
+            return Ok(new { session = result, athleteDisplay });
+        }
+
+        // =========================
+        // GRANULAR UPDATES (ME)
+        // =========================
+        [HttpPost("me/first-name")]
+        public async Task<IActionResult> UpdateFirstName([FromBody] UpdateFirstNameDto dto)
+        {
+            var uid = GetUserIdFromSession();
+            await _userService.UpdateFirstNameForMe(uid, dto?.FirstName ?? "");
+            return Ok(new { message = "FirstName updated." });
+        }
+
+        [HttpPost("me/last-name")]
+        public async Task<IActionResult> UpdateLastName([FromBody] UpdateLastNameDto dto)
+        {
+            var uid = GetUserIdFromSession();
+            await _userService.UpdateLastNameForMe(uid, dto?.LastName ?? "");
+            return Ok(new { message = "LastName updated." });
+        }
+
+        [HttpPost("me/gender")]
+        public async Task<IActionResult> UpdateGender([FromBody] UpdateGenderDto dto)
+        {
+            var uid = GetUserIdFromSession();
+            await _userService.UpdateGenderForMe(uid, dto?.Gender ?? "");
+            return Ok(new { message = "Gender updated." });
+        }
+
+        [HttpPost("me/year-of-birth")]
+        public async Task<IActionResult> UpdateYearOfBirth([FromBody] UpdateYearDto dto)
+        {
+            var uid = GetUserIdFromSession();
+            await _userService.UpdateYearOfBirthForMe(uid, dto?.YearOfBirth ?? 0);
+            return Ok(new { message = "YearOfBirth updated." });
+        }
+
+        [HttpPost("me/change-password")]
+        public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordDto dto)
+        {
+            var uid = GetUserIdFromSession();
+            await _userService.ChangePasswordForMe(uid, dto?.OldPassword ?? "", dto?.NewPassword ?? "");
+            return Ok(new { message = "Password updated." });
+        }
+
+        [HttpPost("me/change-email")]
+        public async Task<IActionResult> ChangeEmail([FromBody] ChangeEmailDto dto)
+        {
+            var uid = GetUserIdFromSession();
+            await _userService.ChangeEmailForMe(uid, dto?.NewEmail ?? "", dto?.Password ?? "");
+            return Ok(new { message = "Email updated." });
+        }
+
+        // =========================
+        // CLUB
+        // =========================
+        [HttpPost("{userId}/requestJoin/{clubId}")]
+        public async Task<IActionResult> RequestJoinClub(int userId, int clubId)
         {
             try
             {
-                var userId = GetUserIdFromToken();
-                var user = await _userService.GetUserById(userId);
+                var sessionId = GetUserIdFromSession();
+                if (userId != sessionId) return Forbid("Може да пращаш заявка само от логнатия профил.");
 
-                if (user == null)
-                {
-                    return NotFound();
-                }
+                var before = await _userService.GetUserById(userId);
+                if (before == null) return NotFound("User not found.");
 
-                return Ok(user);
+                await _userService.UpdateUserClubStatus(userId, clubId);
+
+                if (before.StatusID == 2 && before.ClubID != clubId)
+                    return Ok(new { message = "Заявката за трансфер е изпратена успешно. Изчаква одобрение от новия клуб." });
+
+                return Ok(new { message = "Заявката за присъединяване е изпратена успешно." });
             }
-            catch (UnauthorizedAccessException ex)
+            catch (Exception ex)
             {
-                return Unauthorized(new { message = ex.Message });
+                return StatusCode(500, new { error = ex.Message });
             }
         }
 
@@ -157,22 +253,49 @@ namespace SpoerStats2.Controllers
         public async Task<ActionResult<IEnumerable<User>>> GetUsersByClubId(int clubId)
         {
             var users = await _userService.GetUsersByClubId(clubId);
-
-            // Филтрираме само одобрените потребители (StatusID = 2)
-            var acceptedUsers = users.Where(u => u.StatusID == 2).ToList();
+            var acceptedUsers = users.Where(u => u.StatusID == 2).Select(Sanitize).ToList();
 
             if (!acceptedUsers.Any())
-            {
                 return NotFound("Няма одобрени потребители в този клуб.");
-            }
 
             return Ok(acceptedUsers);
         }
 
+        [HttpGet("pending/{clubId}")]
+        public async Task<IActionResult> GetPendingUsers(int clubId)
+        {
+            var users = await _userService.GetPendingUsers(clubId);
+            return Ok(users.Select(Sanitize).ToList());
+        }
 
+        [HttpPost("approve/{userId}")]
+        public async Task<IActionResult> ApproveUser(int userId)
+        {
+            var ok = await _userService.ApproveUser(userId);
+            return ok
+                ? Ok(new { message = "User approved successfully." })
+                : BadRequest(new { message = "Failed to approve user." });
+        }
+
+        [HttpPost("reject/{userId}")]
+        public async Task<IActionResult> RejectUser(int userId)
+        {
+            var ok = await _userService.RejectUser(userId);
+            return ok
+                ? Ok(new { message = "User rejected successfully." })
+                : BadRequest(new { message = "Failed to reject user." });
+        }
+
+        // =========================
+        // PROFILE PICTURE
+        // =========================
         [HttpPost("uploadProfilePicture/{userId}")]
         public async Task<IActionResult> UploadProfilePicture(int userId, IFormFile file)
         {
+            // ✅ само за себе си (ако искаш coach/admin да могат да качват за атлет, махаш тази проверка)
+            var sessionId = GetUserIdFromSession();
+            if (userId != sessionId) return Forbid("Може да сменяш снимка само на логнатия профил.");
+
             try
             {
                 var profileImageUrl = await _userService.UpdateUserProfilePicture(userId, file);
@@ -210,135 +333,126 @@ namespace SpoerStats2.Controllers
             }
         }
 
-        // Update FirstName
-        [HttpPost("{id}/update-firstname")]
-        public async Task<IActionResult> UpdateFirstName(int id, [FromBody] string firstName)
-        {
-            var user = await _userService.GetUserById(id);
-            if (user == null) return NotFound("User not found.");
-
-            user.FirstName = firstName;
-            await _userService.UpdateUser(user);
-            return Ok("First name updated successfully.");
-        }
-
-        // Update LastName
-        [HttpPost("{id}/update-lastname")]
-        public async Task<IActionResult> UpdateLastName(int id, [FromBody] string lastName)
-        {
-            var user = await _userService.GetUserById(id);
-            if (user == null) return NotFound("User not found.");
-
-            user.LastName = lastName;
-            await _userService.UpdateUser(user);
-            return Ok("Last name updated successfully.");
-        }
-
-        // Update YearOfBirth
-        [HttpPost("{id}/update-yearofbirth")]
-        public async Task<IActionResult> UpdateYearOfBirth(int id, [FromBody] int yearOfBirth)
-        {
-            var user = await _userService.GetUserById(id);
-            if (user == null)
-                return NotFound("User not found.");
-
-            if (yearOfBirth < 1900 || yearOfBirth > DateTime.Now.Year)
-                return BadRequest("Invalid Year of Birth.");
-
-            user.YearOfBirth = yearOfBirth;
-            await _userService.UpdateUser(user);
-            return Ok("Year of birth updated successfully.");
-        }
-
-        // Update Email
-        [HttpPost("{id}/update-email")]
-        public async Task<IActionResult> UpdateEmail(int id, [FromBody] string email)
-        {
-            var user = await _userService.GetUserById(id);
-            if (user == null) return NotFound("User not found.");
-
-            user.Email = email;
-            await _userService.UpdateUser(user);
-            return Ok("Email updated successfully.");
-        }
-
-        // Update Password
-        [HttpPost("{id}/update-password")]
-        public async Task<IActionResult> UpdatePassword(int id, [FromBody] string password)
-        {
-            var user = await _userService.GetUserById(id);
-            if (user == null) return NotFound("User not found.");
-
-            await _userService.UpdatePassword(id, password);
-            return Ok("Password updated successfully.");
-        }
-
+        // =========================
+        // SEARCH / CHECK EMAIL
+        // =========================
         [HttpGet("search")]
         public async Task<ActionResult<IEnumerable<User>>> SearchUsers([FromQuery] string query)
         {
             if (string.IsNullOrWhiteSpace(query))
-            {
                 return BadRequest("Search query cannot be empty.");
-            }
 
             var users = await _userService.SearchUsersByName(query);
             if (users == null || !users.Any())
-            {
                 return NotFound("No users found matching the query.");
-            }
 
-            return Ok(users);
-        }
-        [HttpGet("pending/{clubId}")]
-        public async Task<IActionResult> GetPendingUsers(int clubId)
-        {
-            var users = await _userService.GetPendingUsers(clubId);
-            return Ok(users);
+            return Ok(users.Select(Sanitize).ToList());
         }
 
-        [HttpPost("approve/{userId}")]
-        public async Task<IActionResult> ApproveUser(int userId)
-        {
-            var success = await _userService.ApproveUser(userId);
-            if (success)
-                return Ok(new { message = "User approved successfully." });
-            return BadRequest(new { message = "Failed to approve user." });
-        }
-
-        [HttpPost("reject/{userId}")]
-        public async Task<IActionResult> RejectUser(int userId)
-        {
-            var success = await _userService.RejectUser(userId);
-            if (success)
-                return Ok(new { message = "User rejected successfully." });
-            return BadRequest(new { message = "Failed to reject user." });
-        }
-
-        [HttpPost("{userId}/requestJoin/{clubId}")]
-        public async Task<IActionResult> RequestJoinClub(int userId, int clubId)
-        {
-            try
-            {
-                await _userService.UpdateUserClubStatus(userId, clubId);
-                return Ok(new { message = "Заявката за присъединяване е изпратена успешно." });
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, new { error = ex.Message });
-            }
-        }
         [HttpGet("check-email")]
         public async Task<IActionResult> CheckEmailExists([FromQuery] string email)
         {
             if (string.IsNullOrWhiteSpace(email))
-            {
                 return BadRequest("Email is required.");
-            }
 
             bool exists = await _userService.DoesEmailExist(email);
             return Ok(new { exists });
         }
 
+        // =========================
+        // COACH CREATE ATHLETE
+        // =========================
+        [HttpPost("coach/create-athlete")]
+        public async Task<IActionResult> CoachCreateAthlete([FromBody] CoachCreateAthleteDto dto)
+        {
+            var coachId = GetUserIdFromSession();
 
+            var result = await _userService.CreateAthleteByCoach(
+                coachId,
+                dto.FirstName,
+                dto.LastName,
+                dto.YearOfBirth,
+                dto.Gender
+            );
+
+            result.Athlete = Sanitize(result.Athlete);
+            return Ok(result);
+        }
+
+        // =========================
+        // LOGIN WITH CODE
+        // =========================
+        [HttpPost("login-code")]
+        public async Task<ActionResult> LoginByAccessCode([FromBody] AccessCodeLoginDto dto)
+        {
+            var code = (dto?.Code ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(code)) return BadRequest("Code is required.");
+
+            var user = await _userService.GetUserByAccessCodeLogin(code);
+            if (user == null) return Unauthorized("Invalid code.");
+
+            HttpContext.Session.SetInt32("uid", user.Id);
+
+            var athleteDisplay = BuildAthleteDisplayName(user);
+            HttpContext.Session.SetString("athleteDisplay", athleteDisplay);
+
+            var session = new UserSession(user);
+            return Ok(new { session, athleteDisplay, mustSetCredentials = user.MustSetCredentials });
+        }
+
+        // =========================
+        // SETUP CREDENTIALS
+        // =========================
+        [HttpPost("setup-credentials")]
+        public async Task<IActionResult> SetupCredentials([FromBody] SetupCredentialsDto dto)
+        {
+            var uid = GetUserIdFromSession();
+            await _userService.SetupCredentialsForMe(uid, dto.Email, dto.Password);
+            return Ok(new { message = "Credentials set successfully." });
+        }
+
+        // =========================
+        // helpers
+        // =========================
+        private int GetUserIdFromSession()
+        {
+            var uid = HttpContext.Session.GetInt32("uid");
+            if (uid == null)
+                throw new UnauthorizedAccessException("Няма активна сесия. Първо login.");
+
+            return uid.Value;
+        }
+
+        private static string BuildAthleteDisplayName(User u)
+        {
+            var year = u.YearOfBirth > 0 ? u.YearOfBirth.ToString() : null;
+
+            var ln = (u.LastName ?? "").Trim().ToUpperInvariant();
+            var fn = (u.FirstName ?? "").Trim();
+
+            if (!string.IsNullOrWhiteSpace(year))
+                return $"{ln}, {fn} - {year}";
+
+            return $"{ln}, {fn}";
+        }
+        [HttpGet("coach/access-codes")]
+        public async Task<IActionResult> GetCoachAccessCodes()
+        {
+            try
+            {
+                var coachId = GetUserIdFromSession();
+                var rows = await _userService.GetCoachAthleteAccessCodes(coachId);
+                return Ok(rows);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return Unauthorized(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error loading coach access codes");
+                return StatusCode(500, new { message = "Грешка при зареждане на кодовете за достъп." });
+            }
+        }
     }
 }

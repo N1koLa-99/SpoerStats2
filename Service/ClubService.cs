@@ -1,39 +1,60 @@
 ﻿using SpoerStats2.Models;
 using SpoerStats2.Repository;
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
-public class ClubService
+namespace SpoerStats2.Service
 {
-    private readonly IClubRepository _clubRepository;
-
-    public ClubService(IClubRepository clubRepository)
+    public class ClubService
     {
-        _clubRepository = clubRepository;
-    }
+        private readonly IClubRepository _clubRepository;
 
-    public async Task<IEnumerable<Club>> GetAllClubs()
-    {
-        return await _clubRepository.GetAllClubs();
-    }
+        public ClubService(IClubRepository clubRepository)
+        {
+            _clubRepository = clubRepository;
+        }
 
-    public async Task<Club> GetClubById(int id)
-    {
-        return await _clubRepository.GetClubById(id);
-    }
+        private static bool IsAdmin(int roleId) => roleId == 3;
 
-    public async Task AddClub(Club club)
-    {
-        await _clubRepository.AddClub(club);
-    }
+        private static void EnsureAdmin(int requesterRoleId)
+        {
+            if (!IsAdmin(requesterRoleId))
+                throw new UnauthorizedAccessException("Само админ може да управлява клубове.");
+        }
 
-    public async Task UpdateClub(Club club)
-    {
-        await _clubRepository.UpdateClub(club);
-    }
+        public Task<IEnumerable<Club>> GetAllClubs()
+            => _clubRepository.GetAllClubs();
 
-    public async Task DeleteClub(int id)
-    {
-        await _clubRepository.DeleteClub(id);
+        public Task<Club> GetClubById(int id)
+            => _clubRepository.GetClubById(id);
+
+        // ✅ Admin-only
+        public Task AddClub(Club club, int requesterRoleId)
+        {
+            EnsureAdmin(requesterRoleId);
+            return _clubRepository.AddClub(club);
+        }
+
+        // ✅ Admin-only
+        public Task UpdateClub(Club club, int requesterRoleId)
+        {
+            EnsureAdmin(requesterRoleId);
+            return _clubRepository.UpdateClub(club);
+        }
+
+        // ✅ Admin-only
+        public Task DeleteClub(int id, int requesterRoleId)
+        {
+            EnsureAdmin(requesterRoleId);
+            return _clubRepository.DeleteClub(id);
+        }
+
+        // LENEX helpers (read-only)
+        public Task<Club?> GetClubByCodeNation(string code, string nation)
+            => _clubRepository.GetClubByCodeNation(code, nation);
+
+        public Task<Club?> FindClubByNameLoose(string name)
+            => _clubRepository.FindClubByNameLoose(name);
     }
 }

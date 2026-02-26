@@ -17,6 +17,9 @@ namespace SpoerStats2.Models
         public int SwimmingPoolStandart { get; set; } 
 
         [StringLength(255)]
-        public string Location { get; set; } 
+        public string Location { get; set; }
+        
+        public string? Source { get; set; }
+        public string? SourceKey { get; set; }
     }
 }

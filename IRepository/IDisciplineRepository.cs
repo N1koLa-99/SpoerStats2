@@ -11,6 +11,9 @@ namespace SpoerStats2.Repository
         Task UpdateDiscipline(Discipline discipline);
         Task DeleteDiscipline(int id);
         Task<IEnumerable<Discipline>> GetDisciplinesByIds(IEnumerable<int> ids);
+        Task<Discipline?> GetByName(string name);
+
+
     }
 
 }

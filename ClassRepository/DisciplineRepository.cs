@@ -72,6 +72,15 @@ namespace SpoerStats2.ClassRepository
                 return await connection.QueryAsync<Discipline>(query, new { Ids = ids });
             }
         }
+        public async Task<Discipline> GetByName(string name)
+        {
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                // Търсим по името, което идва от Swimrankings
+                var query = "SELECT * FROM Disciplines WHERE DisciplineName = @Name";
+                return await connection.QuerySingleOrDefaultAsync<Discipline>(query, new { Name = name });
+            }
+        }
 
     }
 

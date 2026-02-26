@@ -1,43 +1,63 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using SpoerStats2.Models;
+using SpoerStats2.Service;
+using System;
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
 
 namespace SpoerStats2.Controllers
 {
+    public sealed class LenexUploadDto
+    {
+        [Required]
+        public IFormFile File { get; set; } = default!;
+    }
+
     [Route("api/[controller]")]
     [ApiController]
     public class ResultsController : ControllerBase
     {
         private readonly ResultService _resultService;
         private readonly UserService _userService;
-        private readonly ClubService _clubService;
+        private readonly LenexImportService _lenexImportService;
 
-        public ResultsController(ResultService resultService, UserService userService, ClubService clubService)
+        public ResultsController(
+            ResultService resultService,
+            UserService userService,
+            LenexImportService lenexImportService)
         {
             _resultService = resultService;
             _userService = userService;
-            _clubService = clubService;
+            _lenexImportService = lenexImportService;
         }
 
-        // GET /api/Results?requesterId=123
+        private static bool IsCoachOrAdmin(int roleId) => roleId == 2 || roleId == 3;
+
+        private ActionResult<T> ForbiddenMsg<T>(string message)
+            => StatusCode(StatusCodes.Status403Forbidden, message);
+
+        private IActionResult ForbiddenMsg(string message)
+            => StatusCode(StatusCodes.Status403Forbidden, message);
+
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<Result>>> GetResults([Required] int requesterId)
+        public async Task<ActionResult<IEnumerable<Result>>> GetResults(
+            [FromQuery] int requesterId = 0,
+            [FromHeader(Name = "Requester-Id")] int requesterIdHeader = 0)
         {
-            if (requesterId <= 0) return BadRequest("Невалиден ID на заявителя.");
+            var rid = requesterId > 0 ? requesterId : requesterIdHeader;
+            if (rid <= 0) return BadRequest("Невалиден ID на заявителя.");
 
             try
             {
-                var user = await _userService.GetUserById(requesterId);
+                var user = await _userService.GetUserById(rid);
                 if (user == null) return NotFound("Потребителят не е намерен.");
 
-                int roleId = user.RoleID;
-                int clubId = user.ClubID;
-
-                var results = (roleId == 2 || roleId == 3)
-                    ? await _resultService.GetResultsForClub(clubId)
-                    : await _resultService.GetResultsForUser(requesterId, roleId, clubId);
-
+                var results = await _resultService.GetResultsForUser(rid, user.RoleID, user.ClubID);
                 return Ok(results);
             }
             catch
@@ -46,51 +66,36 @@ namespace SpoerStats2.Controllers
             }
         }
 
-        // GET /api/Results/5?requesterId=123
-        [HttpGet("{id}")]
-        public async Task<ActionResult<Result>> GetResult([Required] int id, [Required] int requesterId)
+        // ✅ :int за по-точен route matching
+        [HttpGet("{id:int}")]
+        public async Task<ActionResult<Result>> GetResult(
+            [Required] int id,
+            [FromQuery] int requesterId = 0,
+            [FromHeader(Name = "Requester-Id")] int requesterIdHeader = 0)
         {
-            if (id <= 0 || requesterId <= 0) return BadRequest("Невалиден ID на резултат или заявител.");
+            var rid = requesterId > 0 ? requesterId : requesterIdHeader;
+            if (id <= 0 || rid <= 0) return BadRequest("Невалиден ID на резултат или заявител.");
 
             try
             {
-                var user = await _userService.GetUserById(requesterId);
+                var user = await _userService.GetUserById(rid);
                 if (user == null) return NotFound("Потребителят не е намерен.");
 
-                var result = await _resultService.GetResultById(id, requesterId, user.RoleID, user.ClubID);
+                var result = await _resultService.GetResultById(id, rid, user.RoleID, user.ClubID);
                 return Ok(result);
             }
-            catch (KeyNotFoundException ex)
-            {
-                return NotFound(ex.Message);
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                return Forbid(ex.Message);
-            }
-            catch
-            {
-                return StatusCode(500, "Вътрешна грешка на сървъра.");
-            }
+            catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
+            catch (UnauthorizedAccessException ex) { return ForbiddenMsg<Result>(ex.Message); }
+            catch { return StatusCode(500, "Вътрешна грешка на сървъра."); }
         }
 
-        // POST /api/Results
         [HttpPost]
-        public async Task<ActionResult<Result>> PostResult([FromBody] Result result)
+        public async Task<ActionResult<Result>> PostResult(
+            [FromBody] Result result,
+            [FromHeader(Name = "Requester-Id")] int requesterId)
         {
-            var requesterIdStr = HttpContext.Request.Headers["Requester-Id"].ToString();
-            var roleIdStr = HttpContext.Request.Headers["Role-Id"].ToString();
-            var clubIdStr = HttpContext.Request.Headers["Club-Id"].ToString();
-
-            if (string.IsNullOrEmpty(requesterIdStr) ||
-                string.IsNullOrEmpty(roleIdStr) ||
-                string.IsNullOrEmpty(clubIdStr) ||
-                !int.TryParse(requesterIdStr, out int requesterId) ||
-                !int.TryParse(roleIdStr, out int roleId) ||
-                !int.TryParse(clubIdStr, out int clubId))
-            {
-                return BadRequest("Невалидни данни в хедърите.");
-            }
+            if (requesterId <= 0)
+                return BadRequest("Невалиден Requester-Id.");
 
             if (result == null) return BadRequest("Липсва информация за резултата.");
             if (!ModelState.IsValid) return BadRequest(ModelState);
@@ -100,47 +105,29 @@ namespace SpoerStats2.Controllers
                 var user = await _userService.GetUserById(requesterId);
                 if (user == null) return NotFound("Потребителят не е намерен.");
 
-                // позволено само за RoleID 2 или 3
-                if (roleId != 2 && roleId != 3) return Forbid("Само треньори и администратори могат да добавят резултати.");
+                if (!IsCoachOrAdmin(user.RoleID))
+                    return ForbiddenMsg<Result>("Само треньори и администратори могат да добавят резултати.");
 
-                await _resultService.AddResult(result, requesterId, roleId, clubId);
+                await _resultService.AddResult(result, requesterId, user.RoleID, user.ClubID);
                 return CreatedAtAction(nameof(GetResult), new { id = result.Id, requesterId }, result);
             }
-            catch (ArgumentException ex)
-            {
-                return BadRequest(ex.Message);
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                return Forbid(ex.Message);
-            }
-            catch
-            {
-                return StatusCode(500, "Вътрешна грешка на сървъра.");
-            }
+            catch (ArgumentException ex) { return BadRequest(ex.Message); }
+            catch (UnauthorizedAccessException ex) { return ForbiddenMsg<Result>(ex.Message); }
+            catch { return StatusCode(500, "Вътрешна грешка на сървъра."); }
         }
 
-        // PUT /api/Results/5
-        [HttpPut("{id}")]
-        public async Task<IActionResult> PutResult(int id, [FromBody] Result result)
+        [HttpPut("{id:int}")]
+        public async Task<IActionResult> PutResult(
+            int id,
+            [FromBody] Result result,
+            [FromHeader(Name = "Requester-Id")] int requesterId)
         {
-            var requesterIdStr = HttpContext.Request.Headers["Requester-Id"].ToString();
-            var roleIdStr = HttpContext.Request.Headers["Role-Id"].ToString();
-            var clubIdStr = HttpContext.Request.Headers["Club-Id"].ToString();
+            if (requesterId <= 0)
+                return BadRequest("Невалиден Requester-Id.");
 
-            if (string.IsNullOrEmpty(requesterIdStr) ||
-                string.IsNullOrEmpty(roleIdStr) ||
-                string.IsNullOrEmpty(clubIdStr) ||
-                !int.TryParse(requesterIdStr, out int requesterId) ||
-                !int.TryParse(roleIdStr, out int roleId) ||
-                !int.TryParse(clubIdStr, out int clubId))
-            {
-                return BadRequest("Невалидни данни в хедърите.");
-            }
-
+            if (result == null) return BadRequest("Липсва информация за резултата.");
             if (id != result.Id) return BadRequest("Несъответствие между ID в URL и ID на резултата.");
             if (!ModelState.IsValid) return BadRequest(ModelState);
-            if (result == null) return BadRequest("Липсва информация за резултата.");
             if (result.UserId <= 0) return BadRequest("Невалиден ID на потребителя.");
             if (result.ValueTime <= 0 || result.ValueTime > 86400) return BadRequest("Резултатът трябва да е положителна стойност (0..86400).");
             if (result.DisciplineId <= 0) return BadRequest("Невалиден ID на дисциплината.");
@@ -150,69 +137,80 @@ namespace SpoerStats2.Controllers
                 var user = await _userService.GetUserById(requesterId);
                 if (user == null) return NotFound("Потребителят не е намерен.");
 
-                if (roleId != 2 && roleId != 3) return Forbid("Само треньори и администратори могат да редактират резултати.");
+                if (!IsCoachOrAdmin(user.RoleID))
+                    return ForbiddenMsg("Само треньори и администратори могат да редактират резултати.");
 
-                await _resultService.UpdateResult(result, requesterId, roleId, clubId);
+                await _resultService.UpdateResult(result, requesterId, user.RoleID, user.ClubID);
                 return NoContent();
             }
-            catch (KeyNotFoundException ex)
-            {
-                return NotFound(ex.Message);
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                return Forbid(ex.Message);
-            }
-            catch
-            {
-                return StatusCode(500, "Вътрешна грешка на сървъра.");
-            }
+            catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
+            catch (UnauthorizedAccessException ex) { return ForbiddenMsg(ex.Message); }
+            catch { return StatusCode(500, "Вътрешна грешка на сървъра."); }
         }
 
-        // DELETE /api/Results/5
-        [HttpDelete("{id}")]
-        public async Task<IActionResult> DeleteResult(int id)
+        [HttpDelete("{id:int}")]
+        public async Task<IActionResult> DeleteResult(
+            int id,
+            [FromHeader(Name = "Requester-Id")] int requesterId)
         {
-            var requesterIdStr = HttpContext.Request.Headers["Requester-Id"].ToString();
-            var roleIdStr = HttpContext.Request.Headers["Role-Id"].ToString();
-            var clubIdStr = HttpContext.Request.Headers["Club-Id"].ToString();
-
-            if (string.IsNullOrEmpty(requesterIdStr) ||
-                string.IsNullOrEmpty(roleIdStr) ||
-                string.IsNullOrEmpty(clubIdStr) ||
-                !int.TryParse(requesterIdStr, out int requesterId) ||
-                !int.TryParse(roleIdStr, out int roleId) ||
-                !int.TryParse(clubIdStr, out int clubId) ||
-                id <= 0 || requesterId <= 0 || roleId <= 0 || clubId <= 0)
-            {
+            if (id <= 0 || requesterId <= 0)
                 return BadRequest("Невалидни входни данни.");
-            }
 
             try
             {
                 var requester = await _userService.GetUserById(requesterId);
+                if (requester == null) return NotFound("Потребителят не е намерен.");
+
+                if (!IsCoachOrAdmin(requester.RoleID))
+                    return ForbiddenMsg("Само треньори и администратори могат да изтриват резултати.");
+
+                await _resultService.DeleteResult(id, requesterId, requester.RoleID, requester.ClubID);
+                return NoContent();
+            }
+            catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
+            catch (UnauthorizedAccessException ex) { return ForbiddenMsg(ex.Message); }
+            catch { return StatusCode(500, "Вътрешна грешка на сървъра."); }
+        }
+
+        [HttpGet("by-user/{userId:int}/by-discipline/{disciplineId:int}")]
+        public async Task<ActionResult<IEnumerable<Result>>> GetResultsByUserAndDiscipline(
+            int userId,
+            int disciplineId,
+            [FromQuery] int requesterId = 0,
+            [FromHeader(Name = "Requester-Id")] int requesterIdHeader = 0)
+        {
+            var rid = requesterId > 0 ? requesterId : requesterIdHeader;
+
+            if (userId <= 0 || disciplineId <= 0)
+                return BadRequest("Невалиден userId или disciplineId.");
+
+            if (rid <= 0)
+                return BadRequest("Невалиден ID на заявителя.");
+
+            try
+            {
+                var requester = await _userService.GetUserById(rid);
                 if (requester == null)
                     return NotFound("Потребителят не е намерен.");
 
-                var result = await _resultService.GetResultById(id, requesterId, roleId, clubId);
-                if (result == null)
-                    return NotFound("Резултатът не е намерен.");
+                var targetUser = await _userService.GetUserById(userId);
+                if (targetUser == null)
+                    return NotFound("Атлетът не е намерен.");
 
-                if (roleId != 2 && roleId != 3)
-                {
-                    return Forbid("Само треньори и администратори μπορούν да изтриват резултати.");
-                }
+                // Достъп:
+                // Admin (3) -> всички
+                // Coach (2) -> само атлети от неговия клуб
+                // Athlete (1) -> само себе си
+                if (requester.RoleID == 2 && requester.ClubID != targetUser.ClubID)
+                    return StatusCode(StatusCodes.Status403Forbidden, "Нямате достъп до този атлет.");
 
-                await _resultService.DeleteResult(id, requesterId, roleId, clubId);
-                return NoContent();
-            }
-            catch (KeyNotFoundException ex)
-            {
-                return NotFound(ex.Message);
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                return Forbid(ex.Message);
+                if (requester.RoleID != 2 && requester.RoleID != 3 && requester.Id != userId)
+                    return StatusCode(StatusCodes.Status403Forbidden, "Нямате достъп до този атлет.");
+
+                var results = await _resultService.GetResultsByUserIdAndDisciplineId(userId, disciplineId);
+
+                // по дата за диаграма (старо -> ново); фронтът пак си сортира
+                return Ok(results.OrderBy(r => r.ResultDate));
             }
             catch
             {
@@ -220,165 +218,238 @@ namespace SpoerStats2.Controllers
             }
         }
 
-        // GET /api/Results/by-user/164/by-discipline/1
-        [HttpGet("by-user/{userId}/by-discipline/{disciplineId}")]
-        public async Task<ActionResult<IEnumerable<Result>>> GetResultsByUserIdAndDisciplineId(
-    int userId,
-    int disciplineId,
-    [FromHeader(Name = "Requester-Id")] int requesterId // <-- ЕТО ТУК
-)
+        // ✅ НОВО: всички резултати за клуб + дисциплина (за coach таблицата)
+        [HttpGet("by-club/{clubId:int}/by-discipline/{disciplineId:int}")]
+        public async Task<ActionResult<IEnumerable<Result>>> GetResultsByClubAndDiscipline(
+            int clubId,
+            int disciplineId,
+            [FromQuery] int requesterId = 0,
+            [FromHeader(Name = "Requester-Id")] int requesterIdHeader = 0)
         {
-            if (userId <= 0 || disciplineId <= 0 || requesterId <= 0)
-                return BadRequest("Невалидни входни данни.");
+            var rid = requesterId > 0 ? requesterId : requesterIdHeader;
+
+            if (clubId <= 0 || disciplineId <= 0)
+                return BadRequest("Невалиден clubId или disciplineId.");
+
+            if (rid <= 0)
+                return BadRequest("Невалиден ID на заявителя.");
+
+            try
+            {
+                var requester = await _userService.GetUserById(rid);
+                if (requester == null)
+                    return NotFound("Потребителят не е намерен.");
+
+                // Coach -> само своя клуб, Admin -> всички
+                if (requester.RoleID == 2 && requester.ClubID != clubId)
+                    return StatusCode(StatusCodes.Status403Forbidden, "Нямате достъп до резултатите на друг клуб.");
+
+                // Ако искаш да ограничиш атлет (role=1), разкоментирай:
+                // if (requester.RoleID == 1)
+                //    return StatusCode(StatusCodes.Status403Forbidden, "Нямате достъп до този ресурс.");
+
+                var rows = await _resultService.GetResultsByClubAndDiscipline(
+                    clubId,
+                    disciplineId,
+                    rid,
+                    requester.RoleID,
+                    requester.ClubID);
+
+                // Удобно за UI; фронтът пак си групира/сортира
+                return Ok(rows
+                    .OrderBy(r => r.ValueTime)
+                    .ThenByDescending(r => r.ResultDate));
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return ForbiddenMsg<IEnumerable<Result>>(ex.Message);
+            }
+            catch
+            {
+                return StatusCode(500, "Вътрешна грешка на сървъра.");
+            }
+        }
+
+        // ✅ Старият "best" endpoint е преместен на /best
+        [HttpGet("by-club/{clubId:int}/by-discipline/{disciplineId:int}/best")]
+        public async Task<ActionResult<IEnumerable<ClubBestResultDto>>> GetBestResultsByClubAndDiscipline(
+            int clubId,
+            int disciplineId,
+            [FromQuery] int requesterId = 0,
+            [FromHeader(Name = "Requester-Id")] int requesterIdHeader = 0)
+        {
+            var rid = requesterId > 0 ? requesterId : requesterIdHeader;
+
+            if (clubId <= 0 || disciplineId <= 0)
+                return BadRequest("Невалиден clubId или disciplineId.");
+
+            if (rid <= 0)
+                return BadRequest("Невалиден ID на заявителя.");
+
+            try
+            {
+                var requester = await _userService.GetUserById(rid);
+                if (requester == null)
+                    return NotFound("Потребителят не е намерен.");
+
+                if (requester.RoleID == 2 && requester.ClubID != clubId)
+                    return StatusCode(StatusCodes.Status403Forbidden, "Нямате достъп до резултатите на друг клуб.");
+
+                var rows = await _resultService.GetClubBestResultsByDiscipline(
+                    clubId,
+                    disciplineId,
+                    rid,
+                    requester.RoleID,
+                    requester.ClubID);
+
+                return Ok(rows
+                    .OrderBy(x => x.ValueTime)
+                    .ThenBy(x => x.UserFirstName)
+                    .ThenBy(x => x.UserLastName));
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return ForbiddenMsg<IEnumerable<ClubBestResultDto>>(ex.Message);
+            }
+            catch
+            {
+                return StatusCode(500, "Вътрешна грешка на сървъра.");
+            }
+        }
+
+        [HttpPost("import-lenex")]
+        [Consumes("multipart/form-data")]
+        public async Task<IActionResult> ImportLenex(
+            [FromForm] LenexUploadDto dto,
+            [FromHeader(Name = "Requester-Id")] int requesterId)
+        {
+            var file = dto?.File;
+
+            if (requesterId <= 0)
+                return BadRequest("Невалиден Requester-Id.");
+
+            if (file == null || file.Length == 0)
+                return BadRequest("Липсва файл.");
+
+            var ext = Path.GetExtension(file.FileName);
+            var allowedExts = new[] { ".xml", ".lenex", ".lef" };
+
+            var extAllowed =
+                !string.IsNullOrWhiteSpace(ext) &&
+                allowedExts.Contains(ext, StringComparer.OrdinalIgnoreCase);
+
+            if (!extAllowed)
+            {
+                var head = await ReadFileHeadAsync(file, 4096);
+                if (head.IndexOf("<LENEX", StringComparison.OrdinalIgnoreCase) < 0)
+                    return BadRequest("Файлът трябва да е LENEX XML (.xml/.lenex/.lef) или да съдържа <LENEX>.");
+            }
 
             try
             {
                 var requester = await _userService.GetUserById(requesterId);
-                if (requester == null) return NotFound("Потребителят (заявител) не е намерен.");
+                if (requester == null) return NotFound("Потребителят не е намерен.");
 
-                var targetUser = await _userService.GetUserById(userId);
-                if (targetUser == null) return NotFound("Търсеният потребител не е намерен.");
+                if (!IsCoachOrAdmin(requester.RoleID))
+                    return ForbiddenMsg("Само треньор/админ може да импортира LENEX.");
 
-                if (requester.ClubID != targetUser.ClubID) return Forbid("Нямате достъп до този потребител.");
-                if (requester.RoleID != 2 && requester.RoleID != 3 && requesterId != userId)
-                    return Forbid("Нямате права да виждате тези резултати.");
+                // Admin -> всички клубове
+                if (requester.RoleID == 3)
+                {
+                    var repAll = await _lenexImportService.ImportForAllClubs(file);
+                    return Ok(repAll);
+                }
 
-                var results = await _resultService.GetResultsByUserIdAndDisciplineId(userId, disciplineId);
+                // Coach -> само неговия клуб
+                var rep = await _lenexImportService.ImportForClub(file, requester.ClubID);
+                return Ok(rep);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, ex.Message);
+            }
+        }
 
-                // ВРЪЩАМЕ 200 ДОРИ ДА НЯМА ДАННИ
-                return Ok(results ?? Enumerable.Empty<Result>());
+        private static async Task<string> ReadFileHeadAsync(IFormFile file, int maxChars)
+        {
+            await using var stream = file.OpenReadStream();
+            using var reader = new StreamReader(
+                stream,
+                Encoding.UTF8,
+                detectEncodingFromByteOrderMarks: true,
+                bufferSize: 4096,
+                leaveOpen: true);
+
+            var buffer = new char[maxChars];
+            var read = await reader.ReadAsync(buffer, 0, buffer.Length);
+
+            if (stream.CanSeek) stream.Position = 0;
+
+            return read > 0 ? new string(buffer, 0, read) : string.Empty;
+        }
+
+        // ✅ :int
+        [HttpGet("{id:int}/splits")]
+        public async Task<ActionResult<IEnumerable<ResultSplit>>> GetResultSplits(
+            int id,
+            [FromQuery] int requesterId = 0,
+            [FromHeader(Name = "Requester-Id")] int requesterIdHeader = 0)
+        {
+            var rid = requesterId > 0 ? requesterId : requesterIdHeader;
+            if (id <= 0 || rid <= 0) return BadRequest("Невалидни входни данни.");
+
+            try
+            {
+                var user = await _userService.GetUserById(rid);
+                if (user == null) return NotFound("Потребителят не е намерен.");
+
+                var splits = await _resultService.GetSplitsForResult(id, rid, user.RoleID, user.ClubID);
+                return Ok(splits);
+            }
+            catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
+            catch (UnauthorizedAccessException ex) { return StatusCode(StatusCodes.Status403Forbidden, ex.Message); }
+            catch { return StatusCode(500, "Вътрешна грешка на сървъра."); }
+        }
+        [HttpGet("platform-club-leaderboard-by-discipline/{disciplineId:int}")]
+        public async Task<ActionResult<IEnumerable<ClubBestResultDto>>> GetPlatformClubLeaderboardByDiscipline(
+     int disciplineId,
+     [FromQuery] int requesterId = 0,
+     [FromHeader(Name = "Requester-Id")] int requesterIdHeader = 0)
+        {
+            var rid = requesterId > 0 ? requesterId : requesterIdHeader;
+
+            if (disciplineId <= 0)
+                return BadRequest("Невалиден disciplineId.");
+
+            if (rid <= 0)
+                return BadRequest("Невалиден ID на заявителя.");
+
+            try
+            {
+                var requester = await _userService.GetUserById(rid);
+                if (requester == null)
+                    return NotFound("Потребителят не е намерен.");
+
+                var rows = await _resultService.GetPlatformClubLeadersByDiscipline(
+                    disciplineId,
+                    rid,
+                    requester.RoleID,
+                    requester.ClubID);
+
+                // Връщаме празен масив вместо 404 -> по-лесен frontend
+                return Ok(rows ?? Enumerable.Empty<ClubBestResultDto>());
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, ex.Message);
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(ex.Message);
             }
             catch
             {
                 return StatusCode(500, "Вътрешна грешка на сървъра.");
-            }
-        }
-
-
-        // GET /api/Results/by-club/1/by-discipline/2
-        [HttpGet("by-club/{clubId}/by-discipline/{disciplineId}")]
-        public async Task<ActionResult<IEnumerable<UserBestResultDto>>> GetBestResultsByDisciplineInClub(int clubId, int disciplineId)
-        {
-            if (disciplineId <= 0 || clubId <= 0)
-            {
-                return BadRequest("Невалидни входни данни.");
-            }
-
-            try
-            {
-                var clubUsers = await _userService.GetUsersByClubId(clubId);
-                if (clubUsers == null || !clubUsers.Any())
-                {
-                    // 200 с празен списък – по-лесно за фронта
-                    return Ok(new List<UserBestResultDto>());
-                }
-
-                var allResults = new List<UserBestResultDto>();
-
-                foreach (var user in clubUsers)
-                {
-                    var userResults = await _resultService.GetResultsByUserIdAndDisciplineId(user.Id, disciplineId);
-                    var bestResult = userResults?
-                        .OrderBy(r => r.ValueTime)
-                        .FirstOrDefault();
-
-                    if (bestResult != null)
-                    {
-                        var dto = new UserBestResultDto
-                        {
-                            Id = bestResult.Id,
-                            UserId = user.Id,
-                            UserFirstName = user.FirstName,
-                            UserLastName = user.LastName,
-                            UserYearOfBirth = user.YearOfBirth,
-                            DisciplineId = bestResult.DisciplineId,
-                            ValueTime = bestResult.ValueTime,
-                            ResultDate = bestResult.ResultDate,
-                            SwimmingPoolStandart = bestResult.SwimmingPoolStandart,
-                            Location = bestResult.Location
-                        };
-
-                        allResults.Add(dto);
-                    }
-                }
-
-                var sortedResults = allResults.OrderBy(r => r.ValueTime).ToList();
-                return Ok(sortedResults);
-            }
-            catch (Exception)
-            {
-                return StatusCode(500, "Вътрешна грешка на сървъра.");
-            }
-        }
-
-        // GET /api/Results/best-club-by-discipline/1/year/2010
-        [HttpGet("best-club-by-discipline/{disciplineId}/year/{yearOfBirth}")]
-        public async Task<ActionResult<ClubBestResultByGroupDto>> GetBestClubByDisciplineAndAge(int disciplineId, int yearOfBirth)
-        {
-            if (disciplineId <= 0 || yearOfBirth <= 1900)
-                return BadRequest("Невалидни данни.");
-
-            try
-            {
-                var allUsers = await _userService.GetAllUsers();
-                if (allUsers == null || !allUsers.Any())
-                    return NotFound("Няма потребители в системата.");
-
-                var ageGroups = new Dictionary<string, Func<int, bool>>
-                {
-                    { "C", y => y >= 2011 && y <= 2025 },
-                    { "B", y => y >= 2008 && y <= 2010 },
-                    { "A", y => y >= 1925 && y <= 2007 }
-                };
-
-                var group = ageGroups.FirstOrDefault(g => g.Value(yearOfBirth));
-                if (group.Key == null)
-                    return NotFound("Няма възрастова група за тази година.");
-
-                User bestUser = null;
-                Result bestResult = null;
-
-                foreach (var user in allUsers.Where(u => group.Value(u.YearOfBirth)))
-                {
-                    var results = await _resultService.GetResultsByUserIdAndDisciplineId(user.Id, disciplineId);
-                    var userBest = results?.OrderBy(r => r.ValueTime).FirstOrDefault();
-
-                    if (userBest != null && (bestResult == null || userBest.ValueTime < bestResult.ValueTime))
-                    {
-                        bestUser = user;
-                        bestResult = userBest;
-                    }
-                }
-
-                if (bestUser != null && bestResult != null)
-                {
-                    var club = await _clubService.GetClubById(bestUser.ClubID);
-
-                    var dto = new ClubBestResultDto
-                    {
-                        ClubId = club.Id,
-                        ClubName = club.Name,
-                        UserId = bestUser.Id,
-                        UserFirstName = bestUser.FirstName,
-                        UserLastName = bestUser.LastName,
-                        YearOfBirth = bestUser.YearOfBirth,
-                        ValueTime = bestResult.ValueTime,
-                        ResultDate = bestResult.ResultDate,
-                        Location = bestResult.Location
-                    };
-
-                    return Ok(new ClubBestResultByGroupDto
-                    {
-                        AgeGroup = group.Key,
-                        BestResult = dto
-                    });
-                }
-
-                return NotFound("Няма резултати за тази възрастова група.");
-            }
-            catch (Exception)
-            {
-                return StatusCode(500, "Вътрешна грешка.");
             }
         }
     }

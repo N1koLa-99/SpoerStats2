@@ -11,5 +11,10 @@ namespace SpoerStats2.Repository
         Task AddClub(Club club);
         Task UpdateClub(Club club);
         Task DeleteClub(int id);
+
+        // ✅ LENEX
+        Task<Club?> GetClubByCodeNation(string code, string nation);
+        Task<Club?> FindClubByNameLoose(string name);
+
     }
 }
